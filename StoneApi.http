@@ -1,0 +1,6 @@
+@StoneApi_HostAddress = http://localhost:5155
+
+GET {{StoneApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
