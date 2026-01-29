@@ -1,200 +1,356 @@
-﻿//using SqlSugar;
-//using StoneApi.Controllers.QueryModel;
-//using System.Text;
+﻿using Org.BouncyCastle.Bcpg.OpenPgp;
+using SqlSugar;
+using StoneApi.Controllers.QueryModel;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Linq;
+using System.Text;
 
-//namespace StoneApi.Controllers.service
-//{
-//    using System.Text;
-//    using SqlSugar;
-//    using StoneApi.Controllers.QueryModel;
+namespace StoneApi.QueryBuilder
+{
+    public   class DynamicQuerySqlBuilder
+    {
 
-//    public static class DynamicQueryBuilder
-//    {
-//        #region 主入口
-
-//        public static DynamicQueryResult Build(
-//            string tableName,
-//            string? queryField,
-//            WhereNode? where,
-//            string? sortBy,
-//            string? sortOrder,
-//            int? page,
-//            int? pageSize,
-//            bool enablePaging,
-//            Func<string, bool> columnValidator
-//        )
-//        {
-//            var parameters = new List<SugarParameter>();
-//            int paramIndex = 0;
-
-//            // 1️⃣ SELECT
-//            string selectClause = BuildSelectClause(queryField, columnValidator);
-
-//            // 2️⃣ WHERE
-//            string whereSql = "";
-//            if (where != null)
-//            {
-//                (whereSql, var whereParams) =
-//                    BuildWhereClause(where, ref paramIndex);
-
-//                parameters.AddRange(whereParams);
-//            }
-
-//            // 3️⃣ COUNT SQL
-//            var countSql = new StringBuilder($"SELECT COUNT(*) FROM [{tableName}]");
-//            if (!string.IsNullOrEmpty(whereSql))
-//                countSql.Append(" WHERE ").Append(whereSql);
-
-//            // 4️⃣ DATA SQL
-//            var dataSql = new StringBuilder($"SELECT {selectClause} FROM [{tableName}]");
-//            if (!string.IsNullOrEmpty(whereSql))
-//                dataSql.Append(" WHERE ").Append(whereSql);
-
-//            // 5️⃣ ORDER
-//            if (!string.IsNullOrWhiteSpace(sortBy))
-//            {
-//                if (!columnValidator(sortBy))
-//                    throw new ArgumentException($"无效排序字段: {sortBy}");
-
-//                string dir = sortOrder?.Equals("desc", StringComparison.OrdinalIgnoreCase) == true
-//                    ? "DESC"
-//                    : "ASC";
-
-//                dataSql.Append($" ORDER BY [{sortBy}] {dir}");
-//            }
-
-//            // 6️⃣ PAGE
-//            if (enablePaging && page.HasValue && pageSize.HasValue)
-//            {
-//                int offset = (page.Value - 1) * pageSize.Value;
-//                dataSql.Append($" OFFSET {offset} ROWS FETCH NEXT {pageSize.Value} ROWS ONLY");
-//            }
-
-//            return new DynamicQueryResult
-//            {
-//                CountSql = countSql.ToString(),
-//                DataSql = dataSql.ToString(),
-//                Parameters = parameters
-//            };
-//        }
-
-//        #endregion
-
-//        #region SELECT
-
-//        private static string BuildSelectClause(
-//            string? queryField,
-//            Func<string, bool> columnValidator
-//        )
-//        {
-//            if (string.IsNullOrWhiteSpace(queryField))
-//                return "*";
-
-//            var fields = queryField
-//                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-//                .Select(f => f.Trim());
-
-//            var list = new List<string>();
-
-//            foreach (var field in fields)
-//            {
-//                var parts = field.Split(
-//                    new[] { " as ", " AS " },
-//                    StringSplitOptions.RemoveEmptyEntries
-//                );
-
-//                if (parts.Length == 1)
-//                {
-//                    if (!columnValidator(parts[0]))
-//                        throw new ArgumentException($"无效字段: {parts[0]}");
-
-//                    list.Add($"[{parts[0]}]");
-//                }
-//                else if (parts.Length == 2)
-//                {
-//                    var column = parts[0].Trim();
-//                    var alias = parts[1].Trim();
-
-//                    if (!columnValidator(column))
-//                        throw new ArgumentException($"无效字段: {column}");
-
-//                    // alias 允许中文
-//                    if (!alias.All(c =>
-//                            char.IsLetterOrDigit(c)
-//                            || c == '_'
-//                            || c >= 0x4e00))
-//                        throw new ArgumentException($"无效别名: {alias}");
-
-//                    list.Add($"[{column}] AS [{alias}]");
-//                }
-//                else
-//                {
-//                    throw new ArgumentException($"字段格式错误: {field}");
-//                }
-//            }
-
-//            if (!list.Any())
-//                throw new ArgumentException("查询字段不能为空");
-
-//            return string.Join(", ", list);
-//        }
-
-//        #endregion
-
-//        #region WHERE
-
-//        private static (string sql, List<SugarParameter> parameters)
-//            BuildWhereClause(WhereNode node, ref int paramIndex)
-//        {
-//            var parameters = new List<SugarParameter>();
-//            var sql = BuildWhereInternal(node, parameters, ref paramIndex);
-//            return (sql, parameters);
-//        }
-
-//        private static string BuildWhereInternal(
-//            WhereNode node,
-//            List<SugarParameter> parameters,
-//            ref int paramIndex
-//        )
-//        {
-//            if (node == null) return "";
-
-//            // 组合条件
-//            if (node.Children != null && node.Children.Any())
-//            {
-//                var parts = node.Children
-//                    .Select(child =>
-//                        BuildWhereInternal(child, parameters, ref paramIndex))
-//                    .Where(s => !string.IsNullOrWhiteSpace(s))
-//                    .ToList();
-
-//                if (!parts.Any())
-//                    return "";
-
-//                string joiner = node.Logic?.ToUpper() == "OR" ? " OR " : " AND ";
-//                return "(" + string.Join(joiner, parts) + ")";
-//            }
-
-//            // 叶子条件
-//            string paramName = $"@p{paramIndex++}";
-//            parameters.Add(new SugarParameter(paramName, node.Value));
-
-//            return node.Operator switch
-//            {
-//                "=" => $"[{node.Field}] = {paramName}",
-//                "!=" => $"[{node.Field}] <> {paramName}",
-//                ">" => $"[{node.Field}] > {paramName}",
-//                ">=" => $"[{node.Field}] >= {paramName}",
-//                "<" => $"[{node.Field}] < {paramName}",
-//                "<=" => $"[{node.Field}] <= {paramName}",
-//                "like" => $"[{node.Field}] LIKE {paramName}",
-//                "contains" => $"[{node.Field}] LIKE '%' + {paramName} + '%'",
-//                _ => throw new NotSupportedException($"不支持操作符: {node.Operator}")
-//            };
-//        }
-
-//        #endregion
-//    }
+       // SqlSugarClient _db;
 
 
-//}
+
+        public DynamicQuerySqlBuilder()
+        {
+            //_db = db;
+        }
+
+        //public BuiltQueryResult BuildQuery(DynamicQueryRequest request)
+        //{ 
+        //}
+
+    //    /// <summary>
+    //    /// 查询方法
+    //    /// </summary>
+    //    /// <param name="db"></param>
+    //    /// <param name="request"></param>
+    //    /// <param name="allowedTables"></param>
+    //    /// <returns></returns>
+    //    /// <exception cref="ArgumentException"></exception>
+    //    public QueryResult<dynamic> ExecuteQuery(
+    // SqlSugarClient db,
+    // DynamicQueryRequest request,
+    //HashSet<string> allowedTables)
+    //    {
+    //        //if (request == null)
+    //        //    throw new ArgumentException("请求体不能为空");
+
+    //        if (string.IsNullOrWhiteSpace(request.TableName))
+    //            throw new ArgumentException("表名不能为空");
+
+    //        if (!allowedTables.Contains(request.TableName))
+    //            throw new ArgumentException($"不允许查询表：{request.TableName}");
+
+    //        // 1️⃣ 查询字段
+    //        string selectClause = GetQueryFieldStr(request.QueryField);
+
+    //        // 2️⃣ where
+    //        int paramIndex = 0;
+    //        var (whereSql, parameters) = BuildWhereClauseFromRequest(request, ref paramIndex);
+
+    //        // 3️⃣ 总数
+    //        string countSql = $"SELECT COUNT(*) FROM [{request.TableName}]";
+    //        if (!string.IsNullOrEmpty(whereSql))
+    //            countSql += " WHERE " + whereSql;
+
+    //        int total = db.Ado.GetInt(countSql, parameters.ToArray());
+
+    //        // 4️⃣ 查询SQL
+    //        var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
+    //        if (!string.IsNullOrEmpty(whereSql))
+    //            sqlBuilder.Append(" WHERE ").Append(whereSql);
+
+    //        if (!string.IsNullOrWhiteSpace(request.SortBy))
+    //            sqlBuilder.Append(GetOrderByClause(request.SortBy, request.SortOrder));
+
+    //        if (request.Page.HasValue && request.PageSize.HasValue)
+    //        {
+    //            int offset = (request.Page.Value - 1) * request.PageSize.Value;
+    //            sqlBuilder.Append($" OFFSET {offset} ROWS FETCH NEXT {request.PageSize.Value} ROWS ONLY");
+    //        }
+
+    //        string sql = sqlBuilder.ToString();
+    //        var items = db.Ado.SqlQuery<dynamic>(sql, parameters.ToArray());
+
+    //        return new QueryResult<dynamic>
+    //        {
+    //            Items = items,
+    //            Total = total
+    //        };
+    //    }
+
+
+        /// <summary>
+        /// 查询方法
+        /// </summary>
+        /// <param name="db"></param>
+        /// <param name="request"></param>
+        /// <param name="allowedTables"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException"></exception>
+        public QueryResult<dynamic> ExecuteQuery(
+    SqlSugarClient db,
+    DynamicQueryRequest request,
+    HashSet<string> allowedTables)
+        {
+            if (request == null)
+                throw new ArgumentException("请求体不能为空");
+
+            if (string.IsNullOrWhiteSpace(request.TableName))
+                throw new ArgumentException("表名不能为空");
+
+            if (!allowedTables.Contains(request.TableName))
+                throw new ArgumentException($"不允许查询表：{request.TableName}");
+
+            // 1️⃣ 查询字段
+            string selectClause = GetQueryFieldStr(request.QueryField);
+
+            // 2️⃣ where
+            int paramIndex = 0;
+            var (whereSql, parameters) = BuildWhereClauseFromRequest(request, ref paramIndex);
+
+            // 3️⃣ 总数
+            string countSql = $"SELECT COUNT(*) FROM [{request.TableName}]";
+            if (!string.IsNullOrEmpty(whereSql))
+                countSql += " WHERE " + whereSql;
+
+            int total = db.Ado.GetInt(countSql, parameters.ToArray());
+
+            // 4️⃣ 查询SQL
+            var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
+            if (!string.IsNullOrEmpty(whereSql))
+                sqlBuilder.Append(" WHERE ").Append(whereSql);
+
+            if (!string.IsNullOrWhiteSpace(request.SortBy))
+                sqlBuilder.Append(GetOrderByClause(request.SortBy, request.SortOrder));
+
+            if (request.Page.HasValue && request.PageSize.HasValue)
+            {
+                int offset = (request.Page.Value - 1) * request.PageSize.Value;
+                sqlBuilder.Append($" OFFSET {offset} ROWS FETCH NEXT {request.PageSize.Value} ROWS ONLY");
+            }
+
+            string sql = sqlBuilder.ToString();
+            var items = db.Ado.SqlQuery<dynamic>(sql, parameters.ToArray());
+
+            return new QueryResult<dynamic>
+            {
+                Items = items,
+                Total = total
+            };
+        }
+
+
+        /// <summary>
+        /// 导出数据方法
+        /// </summary>
+        /// <param name="db"></param>
+        /// <param name="request"></param>
+        /// <param name="allowedTables"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException"></exception>
+        public DataTable ExecuteQueryForExport(
+    SqlSugarClient db,
+    DynamicQueryRequest request,
+    HashSet<string> allowedTables)
+        {
+            if (request == null)
+                throw new ArgumentException("请求体不能为空");
+
+            if (string.IsNullOrWhiteSpace(request.TableName))
+                throw new ArgumentException("表名不能为空");
+
+            if (!allowedTables.Contains(request.TableName))
+                throw new ArgumentException($"不允许导出表：{request.TableName}");
+
+            // 1️⃣ 查询字段
+            string selectClause = GetQueryFieldStr(request.QueryField);
+
+            // 2️⃣ where
+            int paramIndex = 0;
+            var (whereSql, parameters) = BuildWhereClauseFromRequest(request, ref paramIndex);
+
+            // 3️⃣ SQL
+            var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
+
+            if (!string.IsNullOrEmpty(whereSql))
+                sqlBuilder.Append(" WHERE ").Append(whereSql);
+
+            if (!string.IsNullOrWhiteSpace(request.SortBy))
+                sqlBuilder.Append(GetOrderByClause(request.SortBy, request.SortOrder));
+
+            string sql = sqlBuilder.ToString();
+
+            // 4️⃣ 查询数据
+            DataTable data = db.Ado.GetDataTable(sql, parameters.ToArray());
+
+            return data;
+        }
+
+        /// <summary>
+        /// 获取排序字段
+        /// </summary>
+        /// <param name="SortBy">  排序字段名</param>
+        /// <param name="SortOrder">DESC|ASC  降序或升序</param>
+        /// <returns></returns>
+        private string GetOrderByClause(string SortBy, string SortOrder)
+        {
+
+            string sqlorderbystr = "";
+            if (!string.IsNullOrWhiteSpace(SortBy))
+            {
+                string dir = SortOrder?.Equals("desc", StringComparison.OrdinalIgnoreCase) == true ? "DESC" : "ASC";
+                //if (!IsValidColumnName( SortBy))
+                //    return BadRequest($"无效排序字段: { SortBy}");
+
+                sqlorderbystr = $" ORDER BY [{SortBy}] {dir}";
+
+            }
+            return sqlorderbystr;
+
+        }
+
+        /// <summary>
+        /// 获取查询字段
+        /// </summary>
+        /// <param name="QueryField"></param>
+        /// <returns></returns>
+        private string GetQueryFieldStr(string QueryField)
+        {
+
+            string selectClause = "*";
+            if (!string.IsNullOrWhiteSpace(QueryField))
+            {
+                var safeFields = QueryField
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(f => f.Trim())
+                    .Where(f => f.All(c => char.IsLetterOrDigit(c) || c == '_' || char.IsWhiteSpace(c) || f.Contains(" as ", StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                if (!safeFields.Any())
+                    return null;
+
+                selectClause = string.Join(", ", safeFields);
+            }
+
+            return selectClause;
+        }
+
+
+        // 🔍 提取构建条件的公共方法
+        private (string whereSql, List<SugarParameter> parameters) BuildWhereClauseFromRequest(DynamicQueryRequest request, ref int paramIndex)
+        {
+            var parameters = new List<SugarParameter>();
+            string whereSql = "";
+
+            var simpleWhere = request.SimpleWhere;
+
+            //处理简单条件
+            WhereNode effectiveWhere = request.Where ?? request.MapSimpleWhereToWhereNode(request.SimpleWhere);
+
+            if (request.Where != null)
+            {
+                (whereSql, var whereParams) = BuildWhereClause(request.Where, ref paramIndex);
+                if (!string.IsNullOrEmpty(whereSql))
+                    parameters.AddRange(whereParams);
+            }
+            else if (request.SimpleWhere != null)
+            {
+                (whereSql, var whereParams) = BuildWhereClause(effectiveWhere, ref paramIndex);
+                if (!string.IsNullOrEmpty(whereSql))
+                    parameters.AddRange(whereParams);
+            }
+
+            return (whereSql, parameters);
+        }
+
+
+        private (string whereSql, List<SugarParameter> parameters) BuildWhereClause(WhereNode node, ref int paramIndex)
+        {
+            var clauses = new List<string>();
+            var parameters = new List<SugarParameter>();
+
+            // 处理当前层 Conditions
+            if (node.Conditions != null)
+            {
+                foreach (var cond in node.Conditions)
+                {
+                    if (string.IsNullOrWhiteSpace(cond?.Field) || cond.Value == null)
+                        continue;
+
+                    if (!IsValidColumnName(cond.Field))
+                        throw new ArgumentException($"无效字段名: {cond.Field}");
+
+                    string paramName = $"p_{paramIndex++}";
+                    string clause;
+
+                    switch (cond.Operator?.ToLowerInvariant())
+                    {
+                        case "eq":
+                            clause = $"[{cond.Field}] = @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, cond.Value));
+                            break;
+                        case "contains":
+                            clause = $"[{cond.Field}] LIKE @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, $"%{cond.Value}%"));
+                            break;
+                        case "startswith":
+                            clause = $"[{cond.Field}] LIKE @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, $"{cond.Value}%"));
+                            break;
+                        case "endswith":
+                            clause = $"[{cond.Field}] LIKE @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, $"%{cond.Value}"));
+                            break;
+                        default:
+                            throw new ArgumentException($"不支持的操作符: {cond.Operator}");
+                    }
+                    clauses.Add(clause);
+                }
+            }
+
+            // 处理子 Groups（嵌套 OR/AND）
+            if (node.Groups != null)
+            {
+                foreach (var group in node.Groups)
+                {
+                    var (subSql, subParams) = BuildWhereClause(group, ref paramIndex);
+                    if (!string.IsNullOrEmpty(subSql))
+                    {
+                        // ✅ 关键修复：变量名改为 groupLogic，避免与下方 logic 冲突
+                        string groupLogic = group.Logic?.Equals("or", StringComparison.OrdinalIgnoreCase) == true ? "OR" : "AND";
+                        // 注意：subSql 已经是完整子句（如 "Code LIKE '%SY%' OR Location LIKE '%广东%'"）
+                        // 所以我们只需加括号，groupLogic 实际未被使用（但保留以防后续扩展）
+                        clauses.Add($"({subSql})");
+                        parameters.AddRange(subParams);
+                    }
+                }
+            }
+
+            if (!clauses.Any())
+                return ("", new List<SugarParameter>());
+
+            // ✅ 这里是当前层的连接逻辑（AND 或 OR）
+            string logic = node.Logic?.Equals("or", StringComparison.OrdinalIgnoreCase) == true ? "OR" : "AND";
+            string finalClause = string.Join($" {logic} ", clauses);
+            return (finalClause, parameters);
+        }
+
+        //======================
+        //字段名校验（请根据你的实际规则实现）
+        //======================
+        private bool IsValidColumnName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            // 示例：只允许字母、数字、下划线，且不超过 64 字符
+            return name.All(c => char.IsLetterOrDigit(c) || c == '_') && name.Length <= 64;
+        }
+
+    }
+}

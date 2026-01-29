@@ -4,6 +4,7 @@ using StoneApi.Controllers.QueryModel;
 using System.Data;
 using System.Text;
 
+
 [ApiController]
 [Route("api/[controller]")]
 public class DynamicQueryController : ControllerBase
@@ -228,6 +229,99 @@ public class DynamicQueryController : ControllerBase
         }
     }
 
+    [HttpPost("queryforvbentest")]
+    public   IActionResult QueryPostForVbenTest(QueryDynamicListRequest request)
+    {
+        //// 验证表名
+        //if (string.IsNullOrEmpty(request.TableName) || !allowedTables.Contains(request.TableName.ToLower()))
+        //{
+        //    return ApiResult<QueryResult<dynamic>>.Error("不允许访问的表名");
+        //}
+
+        // 构建查询
+        var query = _db.Queryable<object>().AS(request.TableName);
+
+        // 处理过滤条件
+        query = ApplyFilters(query, request);
+
+        // 处理排序
+        if (!string.IsNullOrEmpty(request.OrderBy))
+        {
+            query = query.OrderBy(request.OrderBy);
+        }
+
+        // 计算总数
+        var total =  query.CountAsync();
+
+        // 应用分页
+        var data =  query.Take(request.PageSize * request.PageIndex).ToListAsync();
+
+        //return ApiResult<QueryResult<dynamic>>.Success(new QueryResult<dynamic>
+        //{
+        //    Items = data,
+        //    Total = total,
+        //    PageIndex = request.PageIndex,
+        //    PageSize = request.PageSize
+        //});
+
+        return Ok(new
+        {
+            code = 0, // 对应 successCode
+            data = new
+            {
+                items = data,
+                total = total
+            }
+        });
+    }
+
+    // 🔍 提取的过滤方法
+    private ISugarQueryable<object> ApplyFilters(ISugarQueryable<object> query, QueryDynamicListRequest request)
+    {
+        // 新的filter表达式处理
+        if (!string.IsNullOrEmpty(request.Filter))
+        {
+            var filterDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(request.Filter);
+            if (filterDict != null)
+            {
+                foreach (var filter in filterDict)
+                {
+                    var columnName = filter.Key;
+                    var columnValue = filter.Value;
+
+                    // 验证列名是否合法（防止SQL注入）
+                    if (IsValidColumnName(columnName))
+                    {
+                        query = query.Where($"{columnName} = @value", new { value = columnValue });
+                    }
+                }
+            }
+        }
+        // 旧的查询参数处理
+        else if (request.Querys != null)
+        {
+            foreach (var queryParam in request.Querys)
+            {
+                var columnName = queryParam.Key;
+                var columnValue = queryParam.Value;
+
+                // 验证列名是否合法（防止SQL注入）
+                if (IsValidColumnName(columnName))
+                {
+                    query = query.Where($"{columnName} = @value", new { value = columnValue });
+                }
+            }
+        }
+
+        return query;
+    }
+
+    // 验证列名是否为合法标识符（防止SQL注入）
+    private bool IsValidColumnName(string columnName)
+    {
+        // 简单验证：只允许字母、数字、下划线，且不以数字开头
+        return System.Text.RegularExpressions.Regex.IsMatch(columnName, @"^[a-zA-Z_][a-zA-Z0-9_]*$");
+    }
 
 
     // ======================
@@ -402,55 +496,55 @@ public class DynamicQueryController : ControllerBase
 
 
 
-    [HttpPost("ExportExcel")]
-    public IActionResult ExportExcel([FromBody] ExportExcelRequest req)
-    {
-        if (string.IsNullOrWhiteSpace(req.TableName))
-            return BadRequest("表名不能为空");
+    //[HttpPost("ExportExcel")]
+    //public IActionResult ExportExcel([FromBody] ExportExcelRequest req)
+    //{
+    //    if (string.IsNullOrWhiteSpace(req.TableName))
+    //        return BadRequest("表名不能为空");
 
-        if (req.Columns == null || req.Columns.Count == 0)
-            return BadRequest("导出列不能为空");
+    //    if (req.Columns == null || req.Columns.Count == 0)
+    //        return BadRequest("导出列不能为空");
 
-        // 1️⃣ 构建查询
-        var query = _db.Queryable<dynamic>().AS(req.TableName);
+    //    // 1️⃣ 构建查询
+    //    var query = _db.Queryable<dynamic>().AS(req.TableName);
 
-        // 2️⃣ Where 条件（动态）
-        if (req.Where != null)
-        {
-            foreach (var kv in req.Where)
-            {
-                if (kv.Value == null) continue;
+    //    // 2️⃣ Where 条件（动态）
+    //    if (req.Where != null)
+    //    {
+    //        foreach (var kv in req.Where)
+    //        {
+    //            if (kv.Value == null) continue;
 
-                var value = kv.Value.ToString();
-                if (string.IsNullOrWhiteSpace(value)) continue;
+    //            var value = kv.Value.ToString();
+    //            if (string.IsNullOrWhiteSpace(value)) continue;
 
-                query = query.Where($"{kv.Key}.Contains(@val)", new { val = value });
-            }
-        }
+    //            query = query.Where($"{kv.Key}.Contains(@val)", new { val = value });
+    //        }
+    //    }
 
-        // 3️⃣ 排序
-        if (!string.IsNullOrWhiteSpace(req.SortBy))
-        {
-            var order = req.SortOrder?.ToLower() == "desc" ? "desc" : "asc";
-            query = query.OrderBy($"{req.SortBy} {order}");
-        }
+    //    // 3️⃣ 排序
+    //    if (!string.IsNullOrWhiteSpace(req.SortBy))
+    //    {
+    //        var order = req.SortOrder?.ToLower() == "desc" ? "desc" : "asc";
+    //        query = query.OrderBy($"{req.SortBy} {order}");
+    //    }
 
-        // 4️⃣ 查询数据
-        DataTable dt = query
-            .Select(string.Join(",", req.Columns))
-            .ToDataTable();
+    //    // 4️⃣ 查询数据
+    //    DataTable dt = query
+    //        .Select(string.Join(",", req.Columns))
+    //        .ToDataTable();
 
-        // 5️⃣ 导出 Excel
-        var fileBytes = ExcelHelper.ExportDataTableToExcel(dt);
+    //    // 5️⃣ 导出 Excel
+    //    var fileBytes = ExcelHelper.ExportDataTableToExcel(dt);
 
-        var fileName = $"{req.TableName}_{DateTime.Now:yyyyMMddHHmmss}.xlsx";
+    //    var fileName = $"{req.TableName}_{DateTime.Now:yyyyMMddHHmmss}.xlsx";
 
-        return File(
-            fileBytes,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            fileName
-        );
-    }
+    //    return File(
+    //        fileBytes,
+    //        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    //        fileName
+    //    );
+    //}
 
     private (string whereSql, List<SugarParameter> parameters) BuildWhereClause(WhereNode node, ref int paramIndex)
     {
@@ -647,12 +741,12 @@ public class DynamicQueryController : ControllerBase
     // ======================
     // 字段名校验（请根据你的实际规则实现）
     // ======================
-    private bool IsValidColumnName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return false;
-        // 示例：只允许字母、数字、下划线，且不超过 64 字符
-        return name.All(c => char.IsLetterOrDigit(c) || c == '_') && name.Length <= 64;
-    }
+    //private bool IsValidColumnName(string name)
+    //{
+    //    if (string.IsNullOrWhiteSpace(name)) return false;
+    //    // 示例：只允许字母、数字、下划线，且不超过 64 字符
+    //    return name.All(c => char.IsLetterOrDigit(c) || c == '_') && name.Length <= 64;
+    //}
 
 
 }

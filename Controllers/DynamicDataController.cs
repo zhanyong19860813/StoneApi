@@ -24,6 +24,9 @@ public class DynamicDataAssistantController : ControllerBase
         "t_product",
         "t_order",
           "ImageList",
+            "t_base_department",
+                "vben_role_menu",
+          "v_t_sys_user_role"
         // 👆 按需添加你的表名
     };
 
@@ -257,7 +260,21 @@ public class DynamicDataAssistantController : ControllerBase
         try
         {
             var data = _db.Ado.SqlQuery<dynamic>(sqlBuilder.ToString(), parameters.ToArray());
-            return Ok(data);
+            //return Ok(new
+            //{
+            //    records = data,
+            //    code = 0
+            //});
+
+            return Ok(new
+            {
+                code = 0, // 对应 successCode
+                data = new
+                {
+                    items = data,
+                    total = 100
+                }
+            });
         }
         catch (Exception ex)
         {
