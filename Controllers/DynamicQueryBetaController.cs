@@ -37,9 +37,9 @@ public class DynamicQueryBetaController : ControllerBase
     {
         try
         {
-            var builder = new DynamicQuerySqlBuilder();
+            var builder = new DynamicQuerySqlBuilder(_db);
 
-            var result = builder.ExecuteQuery(_db, request, AllowedTableNames);
+            var result = builder.ExecuteQuery(  request );
 
             return Ok(new
             {
@@ -60,9 +60,9 @@ public class DynamicQueryBetaController : ControllerBase
     {
         try
         {
-            var builder = new DynamicQuerySqlBuilder();
+            var builder = new DynamicQuerySqlBuilder(_db);
 
-            DataTable data = builder.ExecuteQueryForExport(_db, request, AllowedTableNames);
+            DataTable data = builder.ExecuteQueryForExport(  request );
 
             var fileBytes = ExcelHelper.ExportDataTableToExcel(data);
 

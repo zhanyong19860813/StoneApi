@@ -12,13 +12,24 @@ namespace StoneApi.QueryBuilder
     public   class DynamicQuerySqlBuilder
     {
 
-       // SqlSugarClient _db;
+         SqlSugarClient _db;
+
+        // ✅ 允许动态查询的表名白名单（区分大小写不敏感）
+        private static readonly HashSet<string> AllowedTableNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "t_base_company",
+        "t_product",
+        "t_order",
+          "ImageList",
+          "t_base_department",
+          "vben_menus"
+        // 👆 按需添加你的表名
+    };
 
 
-
-        public DynamicQuerySqlBuilder()
+        public DynamicQuerySqlBuilder(SqlSugarClient db)
         {
-            //_db = db;
+             _db = db;
         }
 
         //public BuiltQueryResult BuildQuery(DynamicQueryRequest request)
@@ -94,10 +105,7 @@ namespace StoneApi.QueryBuilder
         /// <param name="allowedTables"></param>
         /// <returns></returns>
         /// <exception cref="ArgumentException"></exception>
-        public QueryResult<dynamic> ExecuteQuery(
-    SqlSugarClient db,
-    DynamicQueryRequest request,
-    HashSet<string> allowedTables)
+        public QueryResult<dynamic> ExecuteQuery(DynamicQueryRequest request)
         {
             if (request == null)
                 throw new ArgumentException("请求体不能为空");
@@ -105,7 +113,7 @@ namespace StoneApi.QueryBuilder
             if (string.IsNullOrWhiteSpace(request.TableName))
                 throw new ArgumentException("表名不能为空");
 
-            if (!allowedTables.Contains(request.TableName))
+            if (!AllowedTableNames.Contains(request.TableName))
                 throw new ArgumentException($"不允许查询表：{request.TableName}");
 
             // 1️⃣ 查询字段
@@ -120,7 +128,7 @@ namespace StoneApi.QueryBuilder
             if (!string.IsNullOrEmpty(whereSql))
                 countSql += " WHERE " + whereSql;
 
-            int total = db.Ado.GetInt(countSql, parameters.ToArray());
+            int total = _db.Ado.GetInt(countSql, parameters.ToArray());
 
             // 4️⃣ 查询SQL
             var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
@@ -137,7 +145,7 @@ namespace StoneApi.QueryBuilder
             }
 
             string sql = sqlBuilder.ToString();
-            var items = db.Ado.SqlQuery<dynamic>(sql, parameters.ToArray());
+            var items = _db.Ado.SqlQuery<dynamic>(sql, parameters.ToArray());
 
             return new QueryResult<dynamic>
             {
@@ -156,9 +164,9 @@ namespace StoneApi.QueryBuilder
         /// <returns></returns>
         /// <exception cref="ArgumentException"></exception>
         public DataTable ExecuteQueryForExport(
-    SqlSugarClient db,
-    DynamicQueryRequest request,
-    HashSet<string> allowedTables)
+
+    DynamicQueryRequest request
+  )
         {
             if (request == null)
                 throw new ArgumentException("请求体不能为空");
@@ -166,7 +174,7 @@ namespace StoneApi.QueryBuilder
             if (string.IsNullOrWhiteSpace(request.TableName))
                 throw new ArgumentException("表名不能为空");
 
-            if (!allowedTables.Contains(request.TableName))
+            if (!AllowedTableNames.Contains(request.TableName))
                 throw new ArgumentException($"不允许导出表：{request.TableName}");
 
             // 1️⃣ 查询字段
@@ -188,7 +196,7 @@ namespace StoneApi.QueryBuilder
             string sql = sqlBuilder.ToString();
 
             // 4️⃣ 查询数据
-            DataTable data = db.Ado.GetDataTable(sql, parameters.ToArray());
+            DataTable data = _db.Ado.GetDataTable(sql, parameters.ToArray());
 
             return data;
         }
