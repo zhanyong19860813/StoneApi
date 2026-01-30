@@ -22,7 +22,9 @@ namespace StoneApi.QueryBuilder
         "t_order",
           "ImageList",
           "t_base_department",
-          "vben_menus"
+          "vben_menus",
+          "v_t_sys_user_role",
+          "vben_role_menu"
         // 👆 按需添加你的表名
     };
 
@@ -32,70 +34,7 @@ namespace StoneApi.QueryBuilder
              _db = db;
         }
 
-        //public BuiltQueryResult BuildQuery(DynamicQueryRequest request)
-        //{ 
-        //}
-
-    //    /// <summary>
-    //    /// 查询方法
-    //    /// </summary>
-    //    /// <param name="db"></param>
-    //    /// <param name="request"></param>
-    //    /// <param name="allowedTables"></param>
-    //    /// <returns></returns>
-    //    /// <exception cref="ArgumentException"></exception>
-    //    public QueryResult<dynamic> ExecuteQuery(
-    // SqlSugarClient db,
-    // DynamicQueryRequest request,
-    //HashSet<string> allowedTables)
-    //    {
-    //        //if (request == null)
-    //        //    throw new ArgumentException("请求体不能为空");
-
-    //        if (string.IsNullOrWhiteSpace(request.TableName))
-    //            throw new ArgumentException("表名不能为空");
-
-    //        if (!allowedTables.Contains(request.TableName))
-    //            throw new ArgumentException($"不允许查询表：{request.TableName}");
-
-    //        // 1️⃣ 查询字段
-    //        string selectClause = GetQueryFieldStr(request.QueryField);
-
-    //        // 2️⃣ where
-    //        int paramIndex = 0;
-    //        var (whereSql, parameters) = BuildWhereClauseFromRequest(request, ref paramIndex);
-
-    //        // 3️⃣ 总数
-    //        string countSql = $"SELECT COUNT(*) FROM [{request.TableName}]";
-    //        if (!string.IsNullOrEmpty(whereSql))
-    //            countSql += " WHERE " + whereSql;
-
-    //        int total = db.Ado.GetInt(countSql, parameters.ToArray());
-
-    //        // 4️⃣ 查询SQL
-    //        var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
-    //        if (!string.IsNullOrEmpty(whereSql))
-    //            sqlBuilder.Append(" WHERE ").Append(whereSql);
-
-    //        if (!string.IsNullOrWhiteSpace(request.SortBy))
-    //            sqlBuilder.Append(GetOrderByClause(request.SortBy, request.SortOrder));
-
-    //        if (request.Page.HasValue && request.PageSize.HasValue)
-    //        {
-    //            int offset = (request.Page.Value - 1) * request.PageSize.Value;
-    //            sqlBuilder.Append($" OFFSET {offset} ROWS FETCH NEXT {request.PageSize.Value} ROWS ONLY");
-    //        }
-
-    //        string sql = sqlBuilder.ToString();
-    //        var items = db.Ado.SqlQuery<dynamic>(sql, parameters.ToArray());
-
-    //        return new QueryResult<dynamic>
-    //        {
-    //            Items = items,
-    //            Total = total
-    //        };
-    //    }
-
+ 
 
         /// <summary>
         /// 查询方法
@@ -149,9 +88,36 @@ namespace StoneApi.QueryBuilder
 
             return new QueryResult<dynamic>
             {
-                Items = items,
-                Total = total
+                items = items,
+                total = total
             };
+        }
+
+
+        /// <summary>
+        /// 查询方法 查询第一行第一列
+        /// </summary>
+        /// <param name="request"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException"></exception>
+        public object ExecuteScalar(DynamicQueryRequest request)
+        {
+            int paramIndex = 0;   // 👈 就在这里
+
+            string select = GetQueryFieldStr(request.QueryField);
+
+            if (select.Contains(","))
+                throw new ArgumentException("Scalar 查询只能返回一个字段");
+
+            var (whereSql, parameters) =
+                BuildWhereClauseFromRequest(request, ref paramIndex);
+
+            var sql = $"SELECT TOP 1 {select} FROM [{request.TableName}]";
+
+            if (!string.IsNullOrEmpty(whereSql))
+                sql += " WHERE " + whereSql;
+
+            return _db.Ado.GetScalar(sql, parameters.ToArray());
         }
 
 
