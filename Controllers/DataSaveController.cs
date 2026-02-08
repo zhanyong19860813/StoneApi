@@ -58,7 +58,16 @@ public class DataSaveController : ControllerBase
         SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
         helper.SaveBatch(tableName, dt, primaryKey, deleteDt);
 
-        return Ok("保存成功");
+       // return Ok("保存成功");
+
+        return Ok(new
+        {
+            code = 0,
+            data =new { 
+                message= "保存成功"
+            }
+          }
+    );
     }
 
     //private DataTable ConvertToDataTable(List<Dictionary<string, object>> list)

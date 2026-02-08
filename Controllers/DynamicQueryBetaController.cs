@@ -1,4 +1,5 @@
 ﻿using Dm;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using SqlSugar;
@@ -26,8 +27,17 @@ public class DynamicQueryBetaController : ControllerBase
     /// <param name="request"></param>
     /// <returns></returns>
     [HttpGet("query")]
+    [Authorize]
     public IActionResult QueryGet([FromQuery] DynamicQueryRequest request)
     {
+        //当前登录人ID 
+        var userId = User.FindFirst("employeeId")?.Value;
+
+     
+
+        // 方法3：获取用户名
+        var username = User.Identity?.Name;
+
         var builder = new DynamicQuerySqlBuilder(_db);
         var result = builder.ExecuteQuery(request);
         return Ok(new { code = 0,

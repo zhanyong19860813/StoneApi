@@ -24,7 +24,13 @@ namespace StoneApi.QueryBuilder
           "t_base_department",
           "vben_menus",
           "v_t_sys_user_role",
-          "vben_role_menu"
+          "vben_role_menu",
+          "vben_menus_new",
+          "v_vben_t_sys_user_role",
+          "vben_t_sys_user",
+          "t_base_employee",
+          
+          "vben_v_role_menu"
         // 👆 按需添加你的表名
     };
 

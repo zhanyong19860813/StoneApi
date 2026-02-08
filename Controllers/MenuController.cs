@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -202,11 +203,24 @@ namespace StoneApi.Controllers
 
 
 
+        [Authorize]
         [HttpGet("GetMenuFromDb")]
         public IActionResult GetMenuFromDb()
         {
+            //获得当前登录人
+           // var userId = User.FindFirst("employee_id")?.Value;
+
+            //当前登录人ID 
+                var userId = User.FindFirst("employeeId")?.Value;
+
+            //查询当前登录人的菜单数据
+            //var menus = _db.Queryable<vben_menus_new>() vben_v_user_menu
+            //    .Where(m => m.Status == 1)  // 仅获取启用的菜单
+            //    .OrderBy(m => m.Id)  // 根据 Id 排序
+            //    .ToList();
+
             // 使用 SqlSugar 查询启用的菜单数据
-            var menus = _db.Queryable<vben_menus>()
+            var menus = _db.Queryable<vben_menus_new>()
                 .Where(m => m.Status == 1)  // 仅获取启用的菜单
                 .OrderBy(m => m.Id)  // 根据 Id 排序
                 .ToList();
@@ -234,7 +248,7 @@ namespace StoneApi.Controllers
     {
         name = m.Name,
         path = m.Path,
-        component = m.Component,
+        //component = m.Component,
         meta = ParseMeta(m.Meta),
         children = GetChildrenMenus(menus, m.Id)
     })
@@ -248,7 +262,7 @@ namespace StoneApi.Controllers
         }
 
         // 递归获取子菜单
-        private List<object> GetChildrenMenus(List<vben_menus> menus, int parentId)
+        private List<object> GetChildrenMenus(List<vben_menus_new> menus, string parentId)
         {
             var children = menus
                 .Where(m => m.parent_id == parentId)   // ✅ 这里必须用 parentId
@@ -316,5 +330,18 @@ namespace StoneApi.Controllers
         public int Status { get; set; }  // 菜单状态：1 启用，0 禁用
         public string Type { get; set; }  // 菜单类型：menu 或 catalog
          
+    }
+
+    public class vben_menus_new
+    {
+        public string Id { get; set; }  // 菜单的 ID
+        public string Name { get; set; }  // 菜单名称
+        public string Path { get; set; }  // 菜单路径
+        public string Component { get; set; }  // 组件路径
+        public string Meta { get; set; }  // 存储菜单附加信息 (如 JSON 格式)
+        public string? parent_id { get; set; }  // 父菜单 ID
+        public int Status { get; set; }  // 菜单状态：1 启用，0 禁用
+        public string Type { get; set; }  // 菜单类型：menu 或 catalog
+
     }
 }

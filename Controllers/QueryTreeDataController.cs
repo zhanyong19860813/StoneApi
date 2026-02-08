@@ -28,15 +28,21 @@ namespace StoneApi.Controllers
             //    .AS("t_sys_function")
             //    .Select("id, id as [key], parent_id as parentId, name as title")
             //    .ToList();
+            //var list = _db.Queryable<dynamic>()
+            //   .AS("v_data_role_group")
+            //   .Select("id, id as [key],parent_id parentId, name title")
+            //   .ToList();
             var list = _db.Queryable<dynamic>()
-               .AS("v_data_role_group")
+               .AS("vben_role")
                .Select("id, id as [key],parent_id parentId, name title")
                .ToList();
-
             // select id, id as [key],group_id parentId, name title from[dbo].[t_sys_role]
 
             // 2️⃣ 构建树
-            Guid parentid = new Guid("65B1B414-8468-440F-A224-FC5FE2C15CB6");
+            //  Guid parentid = new Guid("65B1B414-8468-440F-A224-FC5FE2C15CB6");
+
+            Guid parentid = new Guid("00000000-0000-0000-0000-000000000000");
+            
             var tree = BuildTree(list, parentid);
 
             return Ok( new { 

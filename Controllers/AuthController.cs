@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using SqlSugar;
 using SqlSugar;
 using StoneApi.Controllers.com;
+using System.Security.Claims;
 using static Org.BouncyCastle.Math.EC.ECCurve;
 
 namespace StoneApi.Controllers
@@ -50,6 +51,9 @@ namespace StoneApi.Controllers
                 .Select("username, password, employee_id")
                 .First();
 
+
+           
+
             if (user == null)
             {
                 return Ok(new
@@ -65,6 +69,14 @@ namespace StoneApi.Controllers
 
             // 用静态方式调用扩展方法（避开 dynamic 调度）
             bool ok = ExtendMethods.VerifyMd5Hash(inputPassword, dbPassword);
+
+            // 2️⃣ 生成 Claims（🔥 employee_id 就在这里）
+            var claims = new List<Claim>
+            {
+                new Claim("employee_id", user.EmployeeId.ToString()), // 👈 就是它
+                new Claim(ClaimTypes.Name, user.UserName),
+                new Claim(ClaimTypes.Role, user.RoleCode)
+            };
 
             if (!ok)
             {
@@ -93,12 +105,22 @@ namespace StoneApi.Controllers
                 return BadRequest("用户名或密码不能为空");
 
             // 查询数据库用户
+            //var user = _db.Queryable<dynamic>()
+            //    .AS("t_sys_user")
+            //    .Where("username=@username")
+            //    .AddParameters(new { username = request.Username })
+            //    .Select("employee_id, username, password")
+            //    .First();
+
             var user = _db.Queryable<dynamic>()
-                .AS("t_sys_user")
+                .AS("vben_t_sys_user")
                 .Where("username=@username")
                 .AddParameters(new { username = request.Username })
                 .Select("employee_id, username, password")
                 .First();
+
+
+            
 
             if (user == null)
                 return Unauthorized("用户名或密码错误");
@@ -126,6 +148,14 @@ namespace StoneApi.Controllers
                 int.Parse(_config["JwtSettings:AccessTokenExpirationMinutes"])
             );
 
+
+            // 2️⃣ 生成 Claims（🔥 employee_id 就在这里）
+            var claims = new List<Claim>
+            {
+                new Claim("employee_id", user.employee_id.ToString()), // 👈 就是它
+                new Claim(ClaimTypes.Name, user.username),
+                //new Claim(ClaimTypes.Role, user.RoleCode)
+            };
             return Ok(new
             {
                 code = 0,
