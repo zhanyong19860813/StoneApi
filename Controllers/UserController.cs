@@ -36,14 +36,21 @@ public class UserController : ControllerBase
 
         string employeeId =  employeeIdClaim;
 
-        var user = _db.Queryable<dynamic>()
-            .AS("t_sys_user")
-            .Where("employee_id=@employeeId")
-            .AddParameters(new { employeeId })
-            .Select("employee_id, username")
-            .First();
+        //var user = _db.Queryable<dynamic>()
+        //    .AS("t_sys_user")
+        //    .Where("employee_id=@employeeId")
+        //    .AddParameters(new { employeeId })
+        //    .Select("employee_id, username")
+        //    .First();
 
-        return Ok(new
+            var user = _db.Queryable<dynamic>()
+         .AS("vben_t_sys_user")
+         .Where("employee_id=@employeeId")
+         .AddParameters(new { employeeId })
+         .Select("employee_id, username")
+         .First();
+
+            return Ok(new
         {
             code = 0,
             data= new

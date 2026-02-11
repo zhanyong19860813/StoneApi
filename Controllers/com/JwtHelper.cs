@@ -8,7 +8,7 @@
 
     public static class JwtHelper
     {
-        public static string GenerateToken(string employeeId, string username, string secret, int expireMinutes = 60)
+        public static string GenerateToken(string employeeId, string UserId,string username, string secret, int expireMinutes = 60)
         {
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -17,6 +17,7 @@
             {
             new Claim(JwtRegisteredClaimNames.Sub, username),
             new Claim("employeeId", employeeId.ToString()),
+             new Claim("UserId", UserId.ToString()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 

@@ -41,18 +41,27 @@ namespace StoneApi.Controllers
             }
 
             // 只按用户名查
+            //var user = _db.Queryable<dynamic>()
+            //    .AS("t_sys_user")
+            //    .Where("username=@username")
+            //    .AddParameters(new
+            //    {
+            //        username = request.Username
+            //    })
+            //    .Select("username, password, employee_id")
+            //    .First();
+
             var user = _db.Queryable<dynamic>()
-                .AS("t_sys_user")
-                .Where("username=@username")
-                .AddParameters(new
-                {
-                    username = request.Username
-                })
-                .Select("username, password, employee_id")
-                .First();
+              .AS("vben_t_sys_user")
+              .Where("username=@username")
+              .AddParameters(new
+              {
+                  username = request.Username
+              })
+              .Select("id,username, password, employee_id")
+              .First();
+            
 
-
-           
 
             if (user == null)
             {
@@ -73,7 +82,8 @@ namespace StoneApi.Controllers
             // 2️⃣ 生成 Claims（🔥 employee_id 就在这里）
             var claims = new List<Claim>
             {
-                new Claim("employee_id", user.EmployeeId.ToString()), // 👈 就是它
+                new Claim("employee_id", user.EmployeeId.ToString()),
+                new Claim("UserId", user.UserId.ToString()),// 👈 就是它
                 new Claim(ClaimTypes.Name, user.UserName),
                 new Claim(ClaimTypes.Role, user.RoleCode)
             };
@@ -116,7 +126,7 @@ namespace StoneApi.Controllers
                 .AS("vben_t_sys_user")
                 .Where("username=@username")
                 .AddParameters(new { username = request.Username })
-                .Select("employee_id, username, password")
+                .Select("employee_id,id,username, password")
                 .First();
 
 
@@ -143,6 +153,7 @@ namespace StoneApi.Controllers
             //// 生成 JWT
             string token = JwtHelper.GenerateToken(
                 user.employee_id,
+                user.id.ToString(), 
                 user.username,
                 _config["JwtSettings:Secret"],
                 int.Parse(_config["JwtSettings:AccessTokenExpirationMinutes"])
@@ -153,6 +164,7 @@ namespace StoneApi.Controllers
             var claims = new List<Claim>
             {
                 new Claim("employee_id", user.employee_id.ToString()), // 👈 就是它
+                new Claim("UserId", user.id.ToString()),
                 new Claim(ClaimTypes.Name, user.username),
                 //new Claim(ClaimTypes.Role, user.RoleCode)
             };

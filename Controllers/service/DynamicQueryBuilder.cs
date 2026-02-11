@@ -52,7 +52,7 @@ namespace StoneApi.QueryBuilder
         /// <exception cref="ArgumentException"></exception>
         public QueryResult<dynamic> ExecuteQuery(DynamicQueryRequest request)
         {
-            if (request == null)
+          if (request == null)
                 throw new ArgumentException("请求体不能为空");
 
             if (string.IsNullOrWhiteSpace(request.TableName))
@@ -240,7 +240,7 @@ namespace StoneApi.QueryBuilder
                 if (!string.IsNullOrEmpty(whereSql))
                     parameters.AddRange(whereParams);
             }
-            else if (request.SimpleWhere != null)
+            else if (request.SimpleWhere != null && request.SimpleWhere.Count > 0)
             {
                 (whereSql, var whereParams) = BuildWhereClause(effectiveWhere, ref paramIndex);
                 if (!string.IsNullOrEmpty(whereSql))
