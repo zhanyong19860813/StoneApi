@@ -1,6 +1,8 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using System.Data;
 using YourNamespace.Helpers;
+
+namespace StoneApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -58,7 +60,7 @@ public class DataSaveController : ControllerBase
         SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
         helper.SaveBatch(tableName, dt, primaryKey, deleteDt);
 
-       // return Ok("保存成功");
+        _ = System.Threading.Tasks.Task.Run(() => TryLogSave("datasave", tableName, request.data?.Count ?? 0, request.deleteRows?.Count ?? 0));
 
         return Ok(new
         {
@@ -69,6 +71,138 @@ public class DataSaveController : ControllerBase
           }
     );
     }
+
+
+    [HttpPost("datasave-multi")]
+    public IActionResult SaveMulti([FromBody] SaveMultiRequest request)
+    {
+        if (request == null || request.tables == null || request.tables.Count == 0)
+            return BadRequest("没有表数据");
+
+        string connStr = "Server=localhost;Database=SJHRsalarySystemDb;User Id=sa;Password=123456;TrustServerCertificate=true;";
+        SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
+
+        try
+        {
+            var tableDtos = new List<BatchTableDto>();
+
+            foreach (var table in request.tables)
+            {
+                // ⭐ 改这里：不能只判断 data
+                bool hasData = table.data != null && table.data.Count > 0;
+                bool hasDelete = table.deleteRows != null && table.deleteRows.Count > 0;
+
+                if (!hasData && !hasDelete)
+                    continue;
+
+                // 主表数据
+                DataTable dt = null;
+                if (hasData)
+                {
+                    dt = ConvertToDataTable(table.data, table.primaryKey);
+                }
+
+                // 删除数据
+                DataTable deleteDt = null;
+                if (hasDelete)
+                {
+                    deleteDt = ConvertToDataTable(table.deleteRows, table.primaryKey);
+                }
+
+                tableDtos.Add(new BatchTableDto
+                {
+                    TableName = table.tableName,
+                    PrimaryKey = table.primaryKey,
+                    Data = dt,
+                    DeleteRows = deleteDt
+                });
+            }
+
+            helper.SaveBatchMultiUltimate(tableDtos);
+
+            var tablesSummary = string.Join(", ", request.tables.Select(t => $"{t.tableName}(+{t.data?.Count ?? 0}/-{t.deleteRows?.Count ?? 0})"));
+            _ = System.Threading.Tasks.Task.Run(() => TryLogSave("datasave-multi", tablesSummary, 0, 0));
+
+            return Ok(new
+            {
+                code = 0,
+                data = new
+                {
+                    message = "多表保存成功"
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new
+            {
+                code = -1,
+                message = ex.Message
+            });
+        }
+    }
+
+
+    //[HttpPost("datasave-multi")]
+    //public IActionResult SaveMulti([FromBody] SaveMultiRequest request)
+    //{
+    //    if (request == null || request.tables == null || request.tables.Count == 0)
+    //        return BadRequest("没有表数据");
+
+    //    string connStr = "Server=localhost;Database=SJHRsalarySystemDb;User Id=sa;Password=123456;TrustServerCertificate=true;";
+    //    SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
+
+    //    try
+    //    {
+    //        // 转换成真正给 SaveBatchMultiUltimate 用的 DTO
+    //        var tableDtos = new List<BatchTableDto>();
+
+    //        foreach (var table in request.tables)
+    //        {
+    //            if (table.data == null || table.data.Count == 0)
+    //                continue;
+
+    //            // 主表数据
+    //            DataTable dt = ConvertToDataTable(table.data, table.primaryKey);
+
+    //            // 删除数据
+    //            DataTable deleteDt = null;
+    //            if (table.deleteRows != null && table.deleteRows.Count > 0)
+    //            {
+    //                deleteDt = ConvertToDataTable(table.deleteRows, table.primaryKey);
+    //            }
+
+    //            tableDtos.Add(new BatchTableDto
+    //            {
+    //                TableName = table.tableName,
+    //                PrimaryKey = table.primaryKey,
+    //                Data = dt,
+    //                //DeleteData = deleteDt
+    //                DeleteRows = deleteDt
+    //            });
+    //        }
+
+    //        // 调用多表事务保存
+    //        helper.SaveBatchMultiUltimate(tableDtos);
+
+    //        return Ok(new
+    //        {
+    //            code = 0,
+    //            data = new
+    //            {
+    //                message = "多表保存成功"
+    //            }
+    //        });
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        return BadRequest(new
+    //        {
+    //            code = -1,
+    //            message = ex.Message
+    //        });
+    //    }
+    //}
 
     //private DataTable ConvertToDataTable(List<Dictionary<string, object>> list)
     //{
@@ -98,6 +232,28 @@ public class DataSaveController : ControllerBase
 
     //    return dt;
     //}
+
+    private void TryLogSave(string endpoint, string target, int addCount, int delCount)
+    {
+        try
+        {
+            var userId = User?.FindFirst("employeeId")?.Value ?? User?.FindFirst("sub")?.Value ?? "";
+            var userName = User?.Identity?.Name ?? User?.FindFirst("name")?.Value ?? "";
+            var ip = Request.Headers["X-Forwarded-For"].FirstOrDefault() ?? Request.Headers["X-Real-IP"].FirstOrDefault() ?? HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
+            var desc = $"保存: +{addCount} -{delCount}";
+            OperationLogController.TryWriteLog(new LogEntry
+            {
+                UserId = userId,
+                UserName = userName,
+                ActionType = "save",
+                Target = target,
+                Description = desc,
+                Endpoint = $"POST /api/DataSave/{endpoint}",
+                Ip = ip,
+            });
+        }
+        catch { }
+    }
 
     private DataTable ConvertToDataTable(List<Dictionary<string, object>> list, string primaryKey)
     {
@@ -152,5 +308,19 @@ public class SaveBatchRequest
     public List<Dictionary<string, object>> data { get; set; }
 
     // 删除的数据列表，可为空
+    public List<Dictionary<string, object>> deleteRows { get; set; }
+}
+
+
+public class SaveMultiRequest
+{
+    public List<BatchTableRequest> tables { get; set; }
+}
+
+public class BatchTableRequest
+{
+    public string tableName { get; set; }
+    public string primaryKey { get; set; }
+    public List<Dictionary<string, object>> data { get; set; }
     public List<Dictionary<string, object>> deleteRows { get; set; }
 }

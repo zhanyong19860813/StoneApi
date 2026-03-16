@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
@@ -230,7 +230,8 @@ namespace StoneApi.Controllers
 
             var menus = _db.Queryable<vben_v_user_role_menus>()
               .Where(m => m.userid== userId && m.Status == 1)  // 仅获取启用的菜单
-              .OrderBy(m => m.Id)  // 根据 Id 排序
+              .OrderBy(m => m.Sort)  // 先按自定义排序字段
+              .OrderBy(m => m.Id)    // 再按 Id 兜底
               .ToList();
 
             // 将数据库中的菜单数据转换为前端需要的格式
@@ -254,10 +255,11 @@ namespace StoneApi.Controllers
     .Where(m => m.parent_id == null)  // 顶级菜单
     .Select(m => new
     {
-        name = m.Name,
+        name = m.Name,  
         path = m.Path,
-        //component = m.Component,
-        meta = ParseMeta(m.Meta),
+      //  component = m.Component,
+        
+        meta = ParseMeta(m.Meta,m.Id),
         children = GetChildrenMenus(menus, m.Id)
     })
     .ToList();
@@ -279,7 +281,7 @@ namespace StoneApi.Controllers
                     name = m.Name,
                     path = m.Path,
                     component = m.Component,
-                    meta = ParseMeta(m.Meta),
+                    meta = ParseMeta(m.Meta,m.Id),
                     children = GetChildrenMenus(menus, m.Id) // 递归
                 })
                 .ToList<object>();
@@ -287,27 +289,119 @@ namespace StoneApi.Controllers
             return children;
         }
 
-        private object ParseMeta(string meta)
+
+
+        //private object ParseMeta(string meta)
+        //{
+        //    if (string.IsNullOrWhiteSpace(meta))
+        //        return new { };
+
+        //    try
+        //    {
+        //        // 直接反序列化为 object，保持原结构
+        //        return JsonConvert.DeserializeObject<object>(meta);
+        //    }
+        //    catch
+        //    {
+        //        return new { };
+        //    }
+        //}
+
+        //private Dictionary<string, object> ParseMeta(string meta)
+        //{
+        //    if (string.IsNullOrWhiteSpace(meta))
+        //        return new Dictionary<string, object>();
+
+        //    try
+        //    {
+        //        var jObj = JObject.Parse(meta);
+
+        //        // 转成 Dictionary<string, object>
+        //        return jObj.ToObject<Dictionary<string, object>>()
+        //               ?? new Dictionary<string, object>();
+        //    }
+        //    catch
+        //    {
+        //        return new Dictionary<string, object>();
+        //    }
+        //}
+
+
+
+
+        private object ParseMeta(string meta,string menuid)
         {
             if (string.IsNullOrWhiteSpace(meta))
-                return new { };
+                return new Dictionary<string, object>();
 
             try
             {
-                var jObj = JObject.Parse(meta);
-
-                return new
-                {
-                    title = jObj["title"]?.ToString(),
-                    icon = jObj["icon"]?.ToString(),
-                    affixTab = jObj["affixTab"]?.ToObject<bool?>()
-                };
+                var token = JToken.Parse(meta);
+                return ConvertJToken(token);
             }
             catch
             {
-                return new { };
+                return new Dictionary<string, object>();
             }
         }
+
+        private object ConvertJToken(JToken token)
+        {
+            switch (token.Type)
+            {
+                case JTokenType.Object:
+                    var dict = new Dictionary<string, object>();
+                    foreach (var prop in ((JObject)token).Properties())
+                    {
+                        dict[prop.Name] = ConvertJToken(prop.Value);
+                    }
+                    return dict;
+
+                case JTokenType.Array:
+                    return token.Select(ConvertJToken).ToList();
+
+                case JTokenType.Integer:
+                    return token.Value<long>();
+
+                case JTokenType.Float:
+                    return token.Value<double>();
+
+                case JTokenType.Boolean:
+                    return token.Value<bool>();
+
+                case JTokenType.String:
+                    return token.Value<string>()!;
+
+                case JTokenType.Null:
+                    return null!;
+
+                default:
+                    return token.ToString();
+            }
+        }
+
+
+        //private object ParseMeta(string meta)
+        //{
+        //    if (string.IsNullOrWhiteSpace(meta))
+        //        return new { };
+
+        //    try
+        //    {
+        //        var jObj = JObject.Parse(meta);
+
+        //        return new
+        //        {
+        //            title = jObj["title"]?.ToString(),
+        //            icon = jObj["icon"]?.ToString(),
+        //            affixTab = jObj["affixTab"]?.ToObject<bool?>()
+        //        };
+        //    }
+        //    catch
+        //    {
+        //        return new { };
+        //    }
+        //}
 
 
         // 获取 Meta 中的特定值（如 "order", "title"）
@@ -350,6 +444,7 @@ namespace StoneApi.Controllers
         public string? parent_id { get; set; }  // 父菜单 ID
         public int Status { get; set; }  // 菜单状态：1 启用，0 禁用
         public string Type { get; set; }  // 菜单类型：menu 或 catalog
+        public int Sort { get; set; }     // 菜单排序
 
     }
 
@@ -373,6 +468,7 @@ namespace StoneApi.Controllers
         public string? parent_id { get; set; }  // 父菜单 ID
         public int Status { get; set; }  // 菜单状态：1 启用，0 禁用
         public string Type { get; set; }  // 菜单类型：menu 或 catalog
+        public int Sort { get; set; }      // 菜单排序
 
     }
 }

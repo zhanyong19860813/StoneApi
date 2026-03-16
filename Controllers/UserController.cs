@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using SqlSugar;
@@ -47,7 +47,7 @@ public class UserController : ControllerBase
          .AS("vben_t_sys_user")
          .Where("employee_id=@employeeId")
          .AddParameters(new { employeeId })
-         .Select("employee_id, username")
+         .Select("id, employee_id, username")
          .First();
 
             return Ok(new
@@ -55,6 +55,7 @@ public class UserController : ControllerBase
             code = 0,
             data= new
             {
+                userId = user.id,
                 employee_id = user.employee_id,
                 username = user.username
             } 

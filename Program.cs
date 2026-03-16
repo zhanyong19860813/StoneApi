@@ -1,4 +1,4 @@
-﻿// 引入必要的命名空间
+// 引入必要的命名空间
 using SqlSugar;  // SqlSugar ORM 框架，用于简化数据库操作
 using System.Text;  // 用于字符串编码操作
 
@@ -16,6 +16,7 @@ var builder = WebApplication.CreateBuilder(args);
 // 添加控制器服务
 // 这是 MVC 模式的核心，用于处理 HTTP 请求并返回响应
 builder.Services.AddControllers();
+builder.Services.AddHttpContextAccessor();
 
 // 添加 API 终结点和 Swagger/OpenAPI 服务
 // 1. AddEndpointsApiExplorer(): 启用 API 终结点元数据，为 Swagger 提供支持
@@ -107,32 +108,46 @@ builder.Services.AddCors(options =>
 
 // ==================== SqlSugar 数据库配置 ====================
 
+StoneApi.Controllers.OperationLogController.SetConnectionString(builder.Configuration.GetConnectionString("DefaultConnection"));
+
 // 注册 SqlSugarClient 为作用域服务
 // Scoped 生命周期：每个 HTTP 请求创建一个新实例，请求结束时销毁
 builder.Services.AddScoped<SqlSugarClient>(sp =>
 {
-    // 创建数据库连接配置
+    var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
+    var httpAccessor = sp.GetService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
     var config = new ConnectionConfig()
     {
-        // 从配置文件获取数据库连接字符串
-        // 格式示例："Server=localhost;Database=MyDb;User Id=sa;Password=123456;"
-        ConnectionString = builder.Configuration.GetConnectionString("DefaultConnection"),
-
-        // 设置数据库类型为 SQL Server
-        // SqlSugar 支持多种数据库：SqlServer、MySql、Oracle、PostgreSQL 等
+        ConnectionString = connStr,
         DbType = DbType.SqlServer,
-
-        // 设置为 true 表示自动关闭数据库连接
-        // 当数据库操作完成后，SqlSugar 会自动释放连接，避免连接泄漏
         IsAutoCloseConnection = true
-
-        // 注意：AdoType 属性已不存在于新版本 SqlSugar 中
-        // 旧版本可能需要指定 AdoType 为 SqlServer，新版本已简化
     };
-
-    // 创建并返回 SqlSugarClient 实例
-    // SqlSugarClient 是主要的数据库操作对象，提供 CRUD、事务、查询等功能
-    return new SqlSugarClient(config);
+    var client = new SqlSugarClient(config);
+    client.Aop.OnLogExecuting = (sql, pars) =>
+    {
+        if (string.IsNullOrEmpty(sql) || sql.IndexOf("vben_sys_operation_log", StringComparison.OrdinalIgnoreCase) >= 0)
+            return;
+        try
+        {
+            var httpContext = httpAccessor?.HttpContext;
+            var userId = httpContext?.User?.FindFirst("employeeId")?.Value ?? httpContext?.User?.FindFirst("sub")?.Value ?? "";
+            var userName = httpContext?.User?.Identity?.Name ?? httpContext?.User?.FindFirst("name")?.Value ?? "";
+            var endpoint = httpContext != null ? $"{httpContext.Request.Method} {httpContext.Request.Path}" : "";
+            var ip = httpContext?.Connection?.RemoteIpAddress?.ToString() ?? "";
+            var forwarded = httpContext?.Request?.Headers["X-Forwarded-For"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(forwarded)) ip = forwarded;
+            var sqlWithParams = pars != null && pars.Length > 0
+                ? sql + " -- " + string.Join(", ", pars.Select(p => $"{p.ParameterName}={p.Value}"))
+                : sql;
+            // 异步写入，不阻塞主 SQL 执行
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { StoneApi.Controllers.OperationLogHelper.TryWriteSqlLog(userId, userName, sqlWithParams, endpoint, ip, null); } catch { }
+            });
+        }
+        catch { }
+    };
+    return client;
 });
 
 // ==================== 构建应用程序 ====================

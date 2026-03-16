@@ -1,4 +1,4 @@
-﻿using Org.BouncyCastle.Bcpg.OpenPgp;
+using Org.BouncyCastle.Bcpg.OpenPgp;
 using SqlSugar;
 using StoneApi.Controllers.QueryModel;
 using System;
@@ -17,6 +17,7 @@ namespace StoneApi.QueryBuilder
         // ✅ 允许动态查询的表名白名单（区分大小写不敏感）
         private static readonly HashSet<string> AllowedTableNames = new(StringComparer.OrdinalIgnoreCase)
     {
+        "vben_v_user_role_menu_actions",  // 用户菜单按钮权限，entityListFromDesigner 必需
         "t_base_company",
         "t_product",
         "t_order",
@@ -29,11 +30,34 @@ namespace StoneApi.QueryBuilder
           "v_vben_t_sys_user_role",
           "vben_t_sys_user",
           "t_base_employee",
-          
-          "vben_v_role_menu"
+          "vben_v_role_menu",
+          "v_t_employee_info",
+          "vben_menu_actions",
+          "vben_v_role_menu_actions",
+          "vben_entity_list",
+          "vben_form_schema_field",
+          "vben_entity_column",
+          "vben_entitylist_desinger",
+          "vben_form_desinger",
+          "vben_form_desinger",
+          "vben_form_desinger",
+          "vben_t_base_dictionary",
+          "vben_t_base_dictionary_detail",
+          "vben_sys_operation_log"
+
         // 👆 按需添加你的表名
     };
 
+        /// <summary>
+        /// 表名是否允许查询（白名单 或 表设计器创建的 vben_t_ 前缀表）
+        /// </summary>
+        private static bool IsTableAllowed(string tableName)
+        {
+            if (string.IsNullOrWhiteSpace(tableName)) return false;
+            if (AllowedTableNames.Contains(tableName)) return true;
+            if (tableName.StartsWith("vben_t_", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
 
         public DynamicQuerySqlBuilder(SqlSugarClient db)
         {
@@ -58,7 +82,7 @@ namespace StoneApi.QueryBuilder
             if (string.IsNullOrWhiteSpace(request.TableName))
                 throw new ArgumentException("表名不能为空");
 
-            if (!AllowedTableNames.Contains(request.TableName))
+            if (!IsTableAllowed(request.TableName))
                 throw new ArgumentException($"不允许查询表：{request.TableName}");
 
             // 1️⃣ 查询字段
@@ -82,6 +106,9 @@ namespace StoneApi.QueryBuilder
 
             if (!string.IsNullOrWhiteSpace(request.SortBy))
                 sqlBuilder.Append(GetOrderByClause(request.SortBy, request.SortOrder));
+            else if (request.Page.HasValue && request.PageSize.HasValue)
+                // OFFSET/FETCH 必须有 ORDER BY，无 SortBy 时用常量兜底
+                sqlBuilder.Append(" ORDER BY (SELECT 1)");
 
             if (request.Page.HasValue && request.PageSize.HasValue)
             {
@@ -146,7 +173,7 @@ namespace StoneApi.QueryBuilder
             if (string.IsNullOrWhiteSpace(request.TableName))
                 throw new ArgumentException("表名不能为空");
 
-            if (!AllowedTableNames.Contains(request.TableName))
+            if (!IsTableAllowed(request.TableName))
                 throw new ArgumentException($"不允许导出表：{request.TableName}");
 
             // 1️⃣ 查询字段
@@ -332,5 +359,92 @@ namespace StoneApi.QueryBuilder
             return name.All(c => char.IsLetterOrDigit(c) || c == '_') && name.Length <= 64;
         }
 
+
+        /// <summary>
+        /// 游标分页 + 可选 COUNT（新方法，不影响原 ExecuteQuery）
+        /// 使用 WHERE cursorField > cursorValue 替代 OFFSET，避免深分页变慢
+        /// </summary>
+        public QueryResultCursor<dynamic> ExecuteQueryCursor(DynamicQueryCursorRequest request)
+        {
+            if (request == null)
+                throw new ArgumentException("请求体不能为空");
+            if (string.IsNullOrWhiteSpace(request.TableName))
+                throw new ArgumentException("表名不能为空");
+            if (!IsTableAllowed(request.TableName))
+                throw new ArgumentException($"不允许查询表：{request.TableName}");
+
+            string cursorField = !string.IsNullOrWhiteSpace(request.CursorField) ? request.CursorField : request.SortBy;
+            if (string.IsNullOrWhiteSpace(cursorField))
+                throw new ArgumentException("游标分页必须指定 CursorField 或 SortBy");
+
+            if (!IsValidColumnName(cursorField))
+                throw new ArgumentException($"无效游标字段: {cursorField}");
+
+            int pageSize = request.PageSize ?? 20;
+            if (pageSize <= 0 || pageSize > 1000) pageSize = 20;
+
+            int paramIndex = 0;
+            var (whereSql, parameters) = BuildWhereClauseFromRequest(request, ref paramIndex);
+
+            // 1️⃣ 可选 COUNT
+            int total = -1;
+            if (request.NeedTotal)
+            {
+                string countSql = $"SELECT COUNT(*) FROM [{request.TableName}]";
+                if (!string.IsNullOrEmpty(whereSql)) countSql += " WHERE " + whereSql;
+                total = _db.Ado.GetInt(countSql, parameters.ToArray());
+            }
+
+            // 2️⃣ 构建查询 SQL
+            string selectClause = GetQueryFieldStr(request.QueryField);
+            var sqlBuilder = new StringBuilder($"SELECT {selectClause} FROM [{request.TableName}]");
+            var allParams = new List<SugarParameter>(parameters);
+
+            // WHERE：原有条件 + 游标条件
+            var whereClauses = new List<string>();
+            if (!string.IsNullOrEmpty(whereSql)) whereClauses.Add($"({whereSql})");
+
+            bool isDesc = request.SortOrder?.Equals("desc", StringComparison.OrdinalIgnoreCase) == true;
+            if (request.CursorValue != null && request.CursorValue.ToString() != "")
+            {
+                string cursorParam = $"p_cursor_{paramIndex++}";
+                string cursorCond = isDesc
+                    ? $"[{cursorField}] < @{cursorParam}"
+                    : $"[{cursorField}] > @{cursorParam}";
+                whereClauses.Add(cursorCond);
+                allParams.Add(new SugarParameter(cursorParam, request.CursorValue));
+            }
+
+            if (whereClauses.Count > 0)
+                sqlBuilder.Append(" WHERE ").Append(string.Join(" AND ", whereClauses));
+
+            sqlBuilder.Append(GetOrderByClause(cursorField, request.SortOrder));
+            sqlBuilder.Append($" OFFSET 0 ROWS FETCH NEXT {pageSize} ROWS ONLY");
+
+            string sql = sqlBuilder.ToString();
+            var dt = _db.Ado.GetDataTable(sql, allParams.ToArray());
+
+            var items = new List<dynamic>();
+            object? lastCursorVal = null;
+            foreach (DataRow row in dt.Rows)
+            {
+                var dict = new Dictionary<string, object>();
+                foreach (DataColumn col in dt.Columns)
+                {
+                    var val = row[col];
+                    dict[col.ColumnName] = val == DBNull.Value ? null! : val;
+                }
+                items.Add(dict);
+                if (dt.Columns.Contains(cursorField))
+                    lastCursorVal = row[cursorField] == DBNull.Value ? null : row[cursorField];
+            }
+
+            return new QueryResultCursor<dynamic>
+            {
+                items = items,
+                total = total,
+                lastCursorValue = lastCursorVal
+            };
+        }
     }
 }

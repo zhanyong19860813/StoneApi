@@ -1,4 +1,4 @@
-﻿namespace StoneApi.Controllers.com
+namespace StoneApi.Controllers.com
 {
     using System;
     using System.IdentityModel.Tokens.Jwt;
@@ -15,11 +15,13 @@
 
             var claims = new[]
             {
-            new Claim(JwtRegisteredClaimNames.Sub, username),
-            new Claim("employeeId", employeeId.ToString()),
-             new Claim("UserId", UserId.ToString()),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
-        };
+                new Claim(JwtRegisteredClaimNames.Sub, username),
+                new Claim(ClaimTypes.Name, username ?? ""),
+                new Claim("name", username ?? ""),
+                new Claim("employeeId", employeeId.ToString()),
+                new Claim("UserId", UserId.ToString()),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
 
             var token = new JwtSecurityToken(
                 issuer: "YourCompany",

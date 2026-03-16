@@ -1,4 +1,4 @@
-﻿using Dm;
+using Dm;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
@@ -76,6 +76,24 @@ public class DynamicQueryBetaController : ControllerBase
                 code = 0,
                 data = result   
             });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 游标分页 + 可选 COUNT 版本（大数据量场景，测试用）
+    /// </summary>
+    [HttpPost("queryforvben-cursor")]
+    public IActionResult QueryPostForVbenCursor([FromBody] DynamicQueryCursorRequest request)
+    {
+        try
+        {
+            var builder = new DynamicQuerySqlBuilder(_db);
+            var result = builder.ExecuteQueryCursor(request);
+            return Ok(new { code = 0, data = result });
         }
         catch (Exception ex)
         {
