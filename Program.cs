@@ -110,11 +110,20 @@ builder.Services.AddCors(options =>
 
 StoneApi.Controllers.OperationLogController.SetConnectionString(builder.Configuration.GetConnectionString("DefaultConnection"));
 
+// 排班 Excel 导入（临时表 + 校验函数 + 落库过程）
+builder.Services.AddScoped<StoneApi.Services.JobSchedulingImportService>();
+
+// 钉钉部门 oapi（HttpClient，与旧服务 SyncHrmToDingTalkJob 调用的接口一致）
+builder.Services.AddHttpClient<StoneApi.Services.DingTalkOapiDepartmentService>();
+builder.Services.AddHttpClient<StoneApi.Services.DingTalkOapiUserService>();
+
 // 注册 SqlSugarClient 为作用域服务
 // Scoped 生命周期：每个 HTTP 请求创建一个新实例，请求结束时销毁
 builder.Services.AddScoped<SqlSugarClient>(sp =>
 {
     var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
+    var cmdTimeout = builder.Configuration.GetValue<int?>("SqlCommandTimeoutSeconds") ?? 180;
+    if (cmdTimeout <= 0) cmdTimeout = 180;
     var httpAccessor = sp.GetService<Microsoft.AspNetCore.Http.IHttpContextAccessor>();
     var config = new ConnectionConfig()
     {
@@ -123,6 +132,7 @@ builder.Services.AddScoped<SqlSugarClient>(sp =>
         IsAutoCloseConnection = true
     };
     var client = new SqlSugarClient(config);
+    client.Ado.CommandTimeOut = cmdTimeout;
     client.Aop.OnLogExecuting = (sql, pars) =>
     {
         if (string.IsNullOrEmpty(sql) || sql.IndexOf("vben_sys_operation_log", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -158,16 +168,13 @@ var app = builder.Build();
 
 // ==================== 配置 HTTP 请求处理管道 ====================
 
-// 配置开发环境的 Swagger 中间件
-// 中间件是处理 HTTP 请求的组件，按顺序执行
-if (app.Environment.IsDevelopment())
+// Swagger：Development 默认开启；发布为 Production 时由 EnableSwaggerInProduction 控制（本机双击 exe 调试可开，公网生产建议 false）
+var enableSwagger =
+    app.Environment.IsDevelopment()
+    || app.Configuration.GetValue<bool>("EnableSwaggerInProduction");
+if (enableSwagger)
 {
-    // UseSwagger(): 启用 Swagger JSON 端点
-    // 生成 OpenAPI 规范文档，可通过 /swagger/v1/swagger.json 访问
     app.UseSwagger();
-
-    // UseSwaggerUI(): 启用 Swagger UI 界面
-    // 提供交互式的 API 文档，可通过 /swagger 访问
     app.UseSwaggerUI();
 }
 
@@ -189,7 +196,13 @@ if (app.Environment.IsDevelopment())
 
 
 
-app.UseHttpsRedirection();  // 可选
+// 仅监听 HTTP（如双击 exe）时 appsettings 里 EnableHttpsRedirection=false，避免 HttpsRedirection 警告
+if (app.Configuration.GetValue<bool>("EnableHttpsRedirection", true))
+{
+    app.UseHttpsRedirection();
+}
+
+app.UseStaticFiles(); // wwwroot，含员工照片 images/employeePhotos
 app.UseCors("AllowAll");
 app.UseAuthentication();    // 👈 必须要有这个
 app.UseAuthorization();     // 👈 这个也要有

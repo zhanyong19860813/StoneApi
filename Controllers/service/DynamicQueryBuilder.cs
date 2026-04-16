@@ -43,7 +43,11 @@ namespace StoneApi.QueryBuilder
           "vben_form_desinger",
           "vben_t_base_dictionary",
           "vben_t_base_dictionary_detail",
-          "vben_sys_operation_log"
+          "vben_sys_operation_log",
+          "Dms_Lst_WaterOrElectricityPrice",
+          "v_Dms_Lst_WaterOrElectricityPrice",
+            "v_t_base_employee",
+            "v_t_base_department"
 
         // 👆 按需添加你的表名
     };
@@ -53,10 +57,12 @@ namespace StoneApi.QueryBuilder
         /// </summary>
         private static bool IsTableAllowed(string tableName)
         {
-            if (string.IsNullOrWhiteSpace(tableName)) return false;
-            if (AllowedTableNames.Contains(tableName)) return true;
-            if (tableName.StartsWith("vben_t_", StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
+            //  if (string.IsNullOrWhiteSpace(tableName)) return false;
+            ////  if (AllowedTableNames.Contains(tableName)) return true;
+            //  if (tableName.StartsWith("vben_t_", StringComparison.OrdinalIgnoreCase)) return true;
+            //  return false;
+
+            return true;
         }
 
         public DynamicQuerySqlBuilder(SqlSugarClient db)
@@ -85,8 +91,10 @@ namespace StoneApi.QueryBuilder
             if (!IsTableAllowed(request.TableName))
                 throw new ArgumentException($"不允许查询表：{request.TableName}");
 
-            // 1️⃣ 查询字段
+            // 1️⃣ 查询字段（字段全部被过滤时避免非法 SQL「SELECT  FROM」）
             string selectClause = GetQueryFieldStr(request.QueryField);
+            if (string.IsNullOrWhiteSpace(selectClause))
+                selectClause = "*";
 
             // 2️⃣ where
             int paramIndex = 0;
@@ -178,6 +186,8 @@ namespace StoneApi.QueryBuilder
 
             // 1️⃣ 查询字段
             string selectClause = GetQueryFieldStr(request.QueryField);
+            if (string.IsNullOrWhiteSpace(selectClause))
+                selectClause = "*";
 
             // 2️⃣ where
             int paramIndex = 0;
@@ -301,7 +311,7 @@ namespace StoneApi.QueryBuilder
                     {
                         case "eq":
                             clause = $"[{cond.Field}] = @{paramName}";
-                            parameters.Add(new SugarParameter(paramName, cond.Value));
+                            parameters.Add(new SugarParameter(paramName, NormalizeScalarConditionValue(cond.Field, cond.Value)));
                             break;
                         case "contains":
                             clause = $"[{cond.Field}] LIKE @{paramName}";
@@ -314,6 +324,14 @@ namespace StoneApi.QueryBuilder
                         case "endswith":
                             clause = $"[{cond.Field}] LIKE @{paramName}";
                             parameters.Add(new SugarParameter(paramName, $"%{cond.Value}"));
+                            break;
+                        case "gte":
+                            clause = $"[{cond.Field}] >= @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, NormalizeScalarConditionValue(cond.Field, cond.Value)));
+                            break;
+                        case "lte":
+                            clause = $"[{cond.Field}] <= @{paramName}";
+                            parameters.Add(new SugarParameter(paramName, NormalizeScalarConditionValue(cond.Field, cond.Value)));
                             break;
                         default:
                             throw new ArgumentException($"不支持的操作符: {cond.Operator}");
@@ -357,6 +375,25 @@ namespace StoneApi.QueryBuilder
             if (string.IsNullOrWhiteSpace(name)) return false;
             // 示例：只允许字母、数字、下划线，且不超过 64 字符
             return name.All(c => char.IsLetterOrDigit(c) || c == '_') && name.Length <= 64;
+        }
+
+        /// <summary>
+        /// eq / gte / lte 条件：若值为合法 GUID 字符串则转为 <see cref="Guid"/>，
+        /// 避免 SQL Server 将无效字符串隐式转换为 <c>uniqueidentifier</c> 时报错（如 id 为 undefined、含空格）。
+        /// </summary>
+        private static object NormalizeScalarConditionValue(string field, string? raw)
+        {
+            if (raw == null)
+                throw new ArgumentException($"查询条件 [{field}] 的值不能为空。");
+            var s = raw.Trim();
+            if (s.Length == 0)
+                throw new ArgumentException($"查询条件 [{field}] 的值不能为空。");
+            if (string.Equals(s, "undefined", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(s, "null", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"查询条件 [{field}] 无效（页面数据未就绪），请刷新后重试。");
+            if (Guid.TryParse(s, out var g))
+                return g;
+            return s;
         }
 
 

@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using SqlSugar;
 using StoneApi.Controllers.QueryModel;
 using System.Data;
@@ -582,6 +582,14 @@ public class DynamicQueryController : ControllerBase
                     case "endswith":
                         clause = $"[{cond.Field}] LIKE @{paramName}";
                         parameters.Add(new SugarParameter(paramName, $"%{cond.Value}"));
+                        break;
+                    case "gte":
+                        clause = $"[{cond.Field}] >= @{paramName}";
+                        parameters.Add(new SugarParameter(paramName, cond.Value));
+                        break;
+                    case "lte":
+                        clause = $"[{cond.Field}] <= @{paramName}";
+                        parameters.Add(new SugarParameter(paramName, cond.Value));
                         break;
                     default:
                         throw new ArgumentException($"不支持的操作符: {cond.Operator}");

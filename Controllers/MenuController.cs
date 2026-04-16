@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -259,7 +261,7 @@ namespace StoneApi.Controllers
         path = m.Path,
       //  component = m.Component,
         
-        meta = ParseMeta(m.Meta,m.Id),
+        meta = EnrichRouteMeta(ParseMeta(m.Meta, m.Id), m.Path, m.Component),
         children = GetChildrenMenus(menus, m.Id)
     })
     .ToList();
@@ -281,7 +283,7 @@ namespace StoneApi.Controllers
                     name = m.Name,
                     path = m.Path,
                     component = m.Component,
-                    meta = ParseMeta(m.Meta,m.Id),
+                    meta = EnrichRouteMeta(ParseMeta(m.Meta, m.Id), m.Path, m.Component),
                     children = GetChildrenMenus(menus, m.Id) // 递归
                 })
                 .ToList<object>();
@@ -380,6 +382,42 @@ namespace StoneApi.Controllers
             }
         }
 
+        /// <summary>
+        /// 设计器类页面切换标签时需 KeepAlive；数据库菜单 meta 常缺该字段，在此按 path/component 补全（不覆盖库里已写的 keepAlive）。
+        /// </summary>
+        private static object EnrichRouteMeta(object? meta, string? path, string? component)
+        {
+            var dict = ToMetaDict(meta);
+            if (ShouldKeepAliveForDesigner(path, component) && !dict.ContainsKey("keepAlive"))
+                dict["keepAlive"] = true;
+            return dict;
+        }
+
+        private static Dictionary<string, object> ToMetaDict(object? meta)
+        {
+            if (meta is Dictionary<string, object> d)
+            {
+                var copy = new Dictionary<string, object>(d.Count, StringComparer.Ordinal);
+                foreach (var kv in d)
+                    copy[kv.Key] = kv.Value;
+                return copy;
+            }
+
+            return new Dictionary<string, object>();
+        }
+
+        private static bool ShouldKeepAliveForDesigner(string? path, string? component)
+        {
+            var p = path ?? "";
+            var c = component ?? "";
+            var cmp = StringComparison.OrdinalIgnoreCase;
+            return p.Contains("form-designer", cmp)
+                || p.Contains("list-designer", cmp)
+                || p.Contains("table-builder", cmp)
+                || c.Contains("form-designer", cmp)
+                || c.Contains("list-designer", cmp)
+                || c.Contains("table-builder", cmp);
+        }
 
         //private object ParseMeta(string meta)
         //{

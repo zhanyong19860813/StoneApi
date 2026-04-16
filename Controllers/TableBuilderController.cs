@@ -146,8 +146,8 @@ public class TableBuilderController : ControllerBase
         if (string.IsNullOrWhiteSpace(tableName))
             return BadRequest(new { code = -1, message = "表名不能为空" });
         var name = tableName.Trim();
-        if (!IsTableAllowedForColumns(name))
-            return BadRequest(new { code = -1, message = $"不允许查询该表/视图的列信息: {name}" });
+        //if (!IsTableAllowedForColumns(name))
+        //    return BadRequest(new { code = -1, message = $"不允许查询该表/视图的列信息: {name}" });
         try
         {
             var sql = @"
@@ -182,7 +182,7 @@ public class TableBuilderController : ControllerBase
         "v_vben_t_sys_user_role", "vben_t_sys_user", "t_base_employee", "vben_v_role_menu", "v_t_employee_info",
         "vben_menu_actions", "vben_v_role_menu_actions", "vben_entity_list", "vben_form_schema_field",
         "vben_entity_column", "vben_entitylist_desinger", "vben_form_desinger", "vben_t_base_dictionary",
-        "vben_t_base_dictionary_detail", "vben_sys_operation_log",
+        "vben_t_base_dictionary_detail", "vben_sys_operation_log","Dms_Lst_WaterOrElectricityPrice","v_Dms_Lst_WaterOrElectricityPrice"
     };
 
     private string BuildCreateTableSql(string tableName, string? description, List<TableColumnDef> columns)

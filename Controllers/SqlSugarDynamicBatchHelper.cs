@@ -199,6 +199,29 @@ namespace YourNamespace.Helpers
 
 
 
+        private HashSet<string> GetTableColumns(string tableName)
+        {
+            var dt = _db.Ado.GetDataTable(
+                @"SELECT c.name
+                  FROM sys.columns c
+                  INNER JOIN sys.objects o ON c.object_id = o.object_id
+                  WHERE o.type = 'U' AND o.name = @tableName;",
+                new SugarParameter("@tableName", tableName)
+            );
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (dt == null) return set;
+
+            foreach (DataRow row in dt.Rows)
+            {
+                var colName = row[0]?.ToString();
+                if (!string.IsNullOrWhiteSpace(colName))
+                    set.Add(colName);
+            }
+
+            return set;
+        }
+
         /**************************************************** 批量保存数据 支持多表 begin*******************************/
 
         public void SaveBatchMultiHighPerformance(List<BatchTableDto> tables)
@@ -488,6 +511,16 @@ namespace YourNamespace.Helpers
             if (!IsValidIdentifier(table.TableName) || !IsValidIdentifier(table.PrimaryKey))
                 throw new ArgumentException("非法表名或主键");
 
+            // 兜底：前端可能会把树形字段/网格内部字段（如 children、_X_ROW_CHILD、_X_ROW_KEY）
+            // 一并提交到 data 里；但这些字段不一定是数据库表的真实列。
+            // 这里按真实表字段白名单过滤，避免 MERGE/OPENJSON 报“列名无效”。
+            var allowedColumns = GetTableColumns(table.TableName);
+            if (!allowedColumns.Contains(table.PrimaryKey))
+            {
+                // 主键列必须存在，否则后续 MERGE 必然失败
+                throw new ArgumentException($"表 {table.TableName} 不存在主键列 {table.PrimaryKey}");
+            }
+
             // =====================================================
             // 1️⃣ 删除（独立执行，不依赖 Data）
             // =====================================================
@@ -548,7 +581,9 @@ namespace YourNamespace.Helpers
                     row[table.PrimaryKey] = id;
                 }
 
+                // 只保留真实列，丢弃 children / _X_ROW_* 等无效键
                 var dict = table.Data.Columns.Cast<DataColumn>()
+                    .Where(c => allowedColumns.Contains(c.ColumnName))
                     .ToDictionary(
                         c => c.ColumnName,
                         c => row[c] == DBNull.Value ? null : row[c]
@@ -562,8 +597,10 @@ namespace YourNamespace.Helpers
             // =====================================================
             // 4️⃣ 构建 MERGE SQL
             // =====================================================
+            // 只用真实列构建 OPENJSON WITH / INSERT / UPDATE
             var columns = table.Data.Columns.Cast<DataColumn>()
                 .Select(c => c.ColumnName)
+                .Where(c => allowedColumns.Contains(c))
                 .ToList();
 
             var nonPkColumns = columns.Where(c => c != table.PrimaryKey).ToList();

@@ -1,0 +1,27 @@
+{
+  "name": "mcp-sqlserver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cursor MCP：只读访问 SQL Server 测试库（表结构、抽样数据、存储过程定义）",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "mcp": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.3.1",
+    "mssql": "^12.2.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

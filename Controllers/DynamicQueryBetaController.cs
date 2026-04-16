@@ -79,7 +79,7 @@ public class DynamicQueryBetaController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { message = ex.Message, code = -1 });
         }
     }
 
@@ -97,7 +97,7 @@ public class DynamicQueryBetaController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { message = ex.Message, code = -1 });
         }
     }
 
@@ -128,7 +128,7 @@ public class DynamicQueryBetaController : ControllerBase
         }
         catch (Exception ex)
         {
-            return BadRequest(ex.Message);
+            return BadRequest(new { message = ex.Message, code = -1 });
         }
     }
 

@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using System.Collections.Generic;
 using System.Data;
 using YourNamespace.Helpers;
 
@@ -10,10 +12,11 @@ public class DataSaveController : ControllerBase
 {
     private readonly SqlSugarDynamicBatchHelper _batchHelper;
 
-    public DataSaveController()
+    public DataSaveController(IConfiguration configuration)
     {
-        // 这里填你的数据库连接字符串
-        string connStr = "Server=localhost;Database=SJHRsalarySystemDb;User Id=sa;Password=123456;TrustServerCertificate=true;";
+        var connStr = configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connStr))
+            throw new InvalidOperationException("未配置连接串 DefaultConnection，DataSave 无法连接数据库。");
         _batchHelper = new SqlSugarDynamicBatchHelper(connStr);
     }
 
@@ -40,36 +43,33 @@ public class DataSaveController : ControllerBase
     public IActionResult Save([FromBody] SaveBatchRequest request)
     {
         if (request == null || request.data == null || request.data.Count == 0)
-            return BadRequest("没有数据");
+            return BadRequest(new { code = -1, message = "没有数据" });
 
         string tableName = request.tableName;
         string primaryKey = request.primaryKey;
 
-        // 将前端传来的 List<Dictionary<string, object>> 转成 DataTable
-        DataTable dt = ConvertToDataTable(request.data, primaryKey);
-
-        // 将 deleteRows 转成 DataTable（如果有）
-        DataTable deleteDt = null;
-        if (request.deleteRows != null && request.deleteRows.Count > 0)
+        try
         {
-            deleteDt = ConvertToDataTable(request.deleteRows, primaryKey);
+            DataTable dt = ConvertToDataTable(request.data, primaryKey);
+
+            DataTable deleteDt = null;
+            if (request.deleteRows != null && request.deleteRows.Count > 0)
+                deleteDt = ConvertToDataTable(request.deleteRows, primaryKey);
+
+            _batchHelper.SaveBatch(tableName, dt, primaryKey, deleteDt);
+
+            _ = System.Threading.Tasks.Task.Run(() => TryLogSave("datasave", tableName, request.data?.Count ?? 0, request.deleteRows?.Count ?? 0));
+
+            return Ok(new
+            {
+                code = 0,
+                data = new { message = "保存成功" }
+            });
         }
-
-        // 调用批量保存
-        string connStr = "Server=localhost;Database=SJHRsalarySystemDb;User Id=sa;Password=123456;TrustServerCertificate=true;";
-        SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
-        helper.SaveBatch(tableName, dt, primaryKey, deleteDt);
-
-        _ = System.Threading.Tasks.Task.Run(() => TryLogSave("datasave", tableName, request.data?.Count ?? 0, request.deleteRows?.Count ?? 0));
-
-        return Ok(new
+        catch (Exception ex)
         {
-            code = 0,
-            data =new { 
-                message= "保存成功"
-            }
-          }
-    );
+            return BadRequest(new { code = -1, message = ex.Message });
+        }
     }
 
 
@@ -77,10 +77,7 @@ public class DataSaveController : ControllerBase
     public IActionResult SaveMulti([FromBody] SaveMultiRequest request)
     {
         if (request == null || request.tables == null || request.tables.Count == 0)
-            return BadRequest("没有表数据");
-
-        string connStr = "Server=localhost;Database=SJHRsalarySystemDb;User Id=sa;Password=123456;TrustServerCertificate=true;";
-        SqlSugarDynamicBatchHelper helper = new SqlSugarDynamicBatchHelper(connStr);
+            return BadRequest(new { code = -1, message = "没有表数据" });
 
         try
         {
@@ -118,7 +115,7 @@ public class DataSaveController : ControllerBase
                 });
             }
 
-            helper.SaveBatchMultiUltimate(tableDtos);
+            _batchHelper.SaveBatchMultiUltimate(tableDtos);
 
             var tablesSummary = string.Join(", ", request.tables.Select(t => $"{t.tableName}(+{t.data?.Count ?? 0}/-{t.deleteRows?.Count ?? 0})"));
             _ = System.Threading.Tasks.Task.Run(() => TryLogSave("datasave-multi", tablesSummary, 0, 0));
@@ -260,19 +257,27 @@ public class DataSaveController : ControllerBase
         var dt = new DataTable();
         if (list == null || list.Count == 0) return dt;
 
-        // 构建列
-        foreach (var key in list[0].Keys)
+        // 合并所有行出现的列名（避免仅按首行建列导致后续行字段丢失、MERGE 不更新）
+        var allKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dict in list)
         {
-            dt.Columns.Add(key, typeof(object));
+            if (dict == null) continue;
+            foreach (var k in dict.Keys)
+                allKeys.Add(k);
         }
+        if (!string.IsNullOrWhiteSpace(primaryKey))
+            allKeys.Add(primaryKey);
 
-        // 如果主键列不存在，手动添加
-        if (!dt.Columns.Contains(primaryKey))
-            dt.Columns.Add(primaryKey, typeof(string));
+        foreach (var key in allKeys)
+        {
+            if (!dt.Columns.Contains(key))
+                dt.Columns.Add(key, typeof(object));
+        }
 
         // 构建行
         foreach (var dict in list)
         {
+            if (dict == null) continue;
             var row = dt.NewRow();
             foreach (var kv in dict)
             {
@@ -305,22 +310,22 @@ public class SaveBatchRequest
     public string primaryKey { get; set; }
 
     // 新增/修改的数据列表
-    public List<Dictionary<string, object>> data { get; set; }
+    public List<Dictionary<string, object>> data { get; set; } = new();
 
     // 删除的数据列表，可为空
-    public List<Dictionary<string, object>> deleteRows { get; set; }
+    public List<Dictionary<string, object>>? deleteRows { get; set; }
 }
 
 
 public class SaveMultiRequest
 {
-    public List<BatchTableRequest> tables { get; set; }
+    public List<BatchTableRequest> tables { get; set; } = new();
 }
 
 public class BatchTableRequest
 {
     public string tableName { get; set; }
     public string primaryKey { get; set; }
-    public List<Dictionary<string, object>> data { get; set; }
-    public List<Dictionary<string, object>> deleteRows { get; set; }
+    public List<Dictionary<string, object>>? data { get; set; }
+    public List<Dictionary<string, object>>? deleteRows { get; set; }
 }

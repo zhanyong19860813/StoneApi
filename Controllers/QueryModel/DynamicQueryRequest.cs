@@ -1,4 +1,4 @@
-﻿namespace StoneApi.Controllers.QueryModel
+namespace StoneApi.Controllers.QueryModel
 {
  
 
@@ -42,11 +42,38 @@
                 Logic = "AND",
                 Conditions = simpleWhere
                     .Where(kv => !string.IsNullOrWhiteSpace(kv.Value)) // 忽略空值
-                    .Select(kv => new Condition
+                    .Select(kv =>
                     {
-                        Field = kv.Key,
-                        Operator = "contains", // 默认模糊查询，可根据需求扩展
-                        Value = kv.Value
+                        string key = kv.Key;
+                        string field;
+                        string op;
+                        if (key.EndsWith("_gte", StringComparison.OrdinalIgnoreCase) && key.Length > 4)
+                        {
+                            field = key.Substring(0, key.Length - 4);
+                            op = "gte";
+                        }
+                        else if (key.EndsWith("_lte", StringComparison.OrdinalIgnoreCase) && key.Length > 4)
+                        {
+                            field = key.Substring(0, key.Length - 4);
+                            op = "lte";
+                        }
+                        else if (key.EndsWith("_eq", StringComparison.OrdinalIgnoreCase) && key.Length > 3)
+                        {
+                            field = key.Substring(0, key.Length - 3);
+                            op = "eq";
+                        }
+                        else
+                        {
+                            field = key;
+                            op = "contains";
+                        }
+
+                        return new Condition
+                        {
+                            Field = field,
+                            Operator = op,
+                            Value = kv.Value
+                        };
                     }).ToList()
             };
 

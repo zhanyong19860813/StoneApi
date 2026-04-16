@@ -29,6 +29,10 @@ _ReSharper*/
 # VS Code
 .vscode/
 
+# Node MCP (SQL Server)
+tools/mcp-sqlserver/node_modules/
+tools/mcp-sqlserver/.env
+
 # macOS
 .DS_Store
 
