@@ -31,6 +31,37 @@ public class WorkflowEngineProcessController : ControllerBase
         ?? User?.Identity?.Name
         ?? "";
 
+    private bool IsWorkflowAdmin()
+    {
+        if (User?.Identity?.IsAuthenticated != true) return false;
+        if (User.IsInRole("WorkflowAdmin") || User.IsInRole("Admin") || User.IsInRole("SuperAdmin"))
+            return true;
+        var roleClaims = User.Claims
+            .Where(c =>
+                c.Type == ClaimTypes.Role
+                || c.Type.Equals("role", StringComparison.OrdinalIgnoreCase)
+                || c.Type.Equals("roles", StringComparison.OrdinalIgnoreCase)
+                || c.Type.Equals("RoleCode", StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Value ?? "")
+            .Where(v => v.Length > 0);
+        foreach (var raw in roleClaims)
+        {
+            var tokens = raw.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var token in tokens)
+            {
+                var t = token.Trim();
+                if (t.Equals("WorkflowAdmin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("Administrator", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// <summary>左侧树：目录 + 流程叶子</summary>
     [HttpGet("tree")]
     public IActionResult GetTree()
@@ -65,6 +96,7 @@ public class WorkflowEngineProcessController : ControllerBase
                     processCode = d.process_code,
                     processName = d.process_name,
                     status = d.status,
+                    isValid = d.is_valid,
                     latestVersion = d.latest_version
                 }).ToList()
             }
@@ -97,6 +129,7 @@ public class WorkflowEngineProcessController : ControllerBase
                     categoryId = def.category_id,
                     categoryCode = def.category_code,
                     status = def.status,
+                    isValid = def.is_valid,
                     latestVersion = def.latest_version,
                     updatedAt = def.updated_at
                 },
@@ -150,6 +183,7 @@ public class WorkflowEngineProcessController : ControllerBase
             category_id = req.CategoryId,
             category_code = null,
             status = 0,
+            is_valid = true,
             latest_version = 0,
             created_by = uid,
             created_at = now,
@@ -170,6 +204,8 @@ public class WorkflowEngineProcessController : ControllerBase
         /// <summary>与静态页 wfMeta 一致的可选扩展</summary>
         public string? InitiatorScope { get; set; }
         public string? Remark { get; set; }
+        /// <summary>是否有效（允许发起等）；默认 true</summary>
+        public bool IsValid { get; set; } = true;
         /// <summary>设计器 getWorkflowDraftSnapshot 整包 JSON（对象）</summary>
         public JsonElement? Definition { get; set; }
     }
@@ -207,6 +243,7 @@ public class WorkflowEngineProcessController : ControllerBase
             definitionObj["initiatorScope"] = req.InitiatorScope;
         if (!string.IsNullOrWhiteSpace(req.Remark))
             definitionObj["remark"] = req.Remark;
+        definitionObj["isValid"] = req.IsValid;
 
         var definitionJson = definitionObj.ToString(Formatting.None);
         var engineToken = definitionObj["engineModel"];
@@ -244,6 +281,7 @@ public class WorkflowEngineProcessController : ControllerBase
             _db.Updateable<wf_process_def>()
                 .SetColumns(d => d.process_name == name)
                 .SetColumns(d => d.category_id == newCat)
+                .SetColumns(d => d.is_valid == req.IsValid)
                 .SetColumns(d => d.latest_version == nextNo)
                 .SetColumns(d => d.updated_at == now)
                 .SetColumns(d => d.updated_by == uid)
@@ -520,6 +558,9 @@ public class WorkflowEngineProcessController : ControllerBase
     [HttpPost("seed/demo-tree")]
     public IActionResult SeedDemoTree()
     {
+        if (!IsWorkflowAdmin())
+            return Ok(new { code = 403, message = "无权限执行演示目录初始化" });
+
         if (_db.Queryable<wf_process_category>().Any())
             return Ok(new { code = 0, message = "已有目录数据，跳过", data = new { skipped = true } });
 
@@ -568,6 +609,7 @@ public class WorkflowEngineProcessController : ControllerBase
                 category_id = cat,
                 category_code = null,
                 status = 0,
+                is_valid = true,
                 latest_version = 0,
                 created_by = uid,
                 created_at = now,
@@ -576,9 +618,95 @@ public class WorkflowEngineProcessController : ControllerBase
             }).ExecuteCommand();
         }
 
-        InsProc(Guid.NewGuid(), "HR_LEAVE", "请假流程", catHr);
-        InsProc(Guid.NewGuid(), "HR_OT", "加班流程", catHr);
-        InsProc(Guid.NewGuid(), "ADM_CAR", "用车申请", catAdm);
+        /// <summary>与前端 LogicFlow 一致的最小可渲染图（开始→结束），避免仅有流程头无版本行时画布空白。</summary>
+        static string BuildSeedDefinitionJson(string processCode, string processName)
+        {
+            var root = new JObject
+            {
+                ["processCode"] = processCode,
+                ["processName"] = processName,
+                ["processVersion"] = "1",
+                ["graphData"] = new JObject
+                {
+                    ["nodes"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "N_START",
+                            ["type"] = "circle",
+                            ["x"] = 120,
+                            ["y"] = 220,
+                            ["text"] = "发起申请",
+                            ["properties"] = new JObject
+                            {
+                                ["bizType"] = "start",
+                                ["assignee"] = "发起人"
+                            }
+                        },
+                        new JObject
+                        {
+                            ["id"] = "N_END",
+                            ["type"] = "circle",
+                            ["x"] = 400,
+                            ["y"] = 220,
+                            ["text"] = "结束",
+                            ["properties"] = new JObject
+                            {
+                                ["bizType"] = "end",
+                                ["assignee"] = "系统"
+                            }
+                        }
+                    },
+                    ["edges"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["id"] = "E1",
+                            ["type"] = "polyline",
+                            ["sourceNodeId"] = "N_START",
+                            ["targetNodeId"] = "N_END"
+                        }
+                    }
+                }
+            };
+            return root.ToString(Formatting.None);
+        }
+
+        void InsFirstVersion(Guid processDefId, string code, string name)
+        {
+            var verId = Guid.NewGuid();
+            var defJson = BuildSeedDefinitionJson(code, name);
+            _db.Insertable(new wf_process_def_ver
+            {
+                id = verId,
+                process_def_id = processDefId,
+                version_no = 1,
+                is_published = false,
+                published_at = null,
+                definition_json = defJson,
+                engine_model_json = null,
+                checksum = null,
+                created_by = uid,
+                created_at = now
+            }).ExecuteCommand();
+
+            _db.Updateable<wf_process_def>()
+                .SetColumns(d => d.latest_version == 1)
+                .SetColumns(d => d.updated_at == now)
+                .SetColumns(d => d.updated_by == uid)
+                .Where(d => d.id == processDefId)
+                .ExecuteCommand();
+        }
+
+        var p1 = Guid.NewGuid();
+        var p2 = Guid.NewGuid();
+        var p3 = Guid.NewGuid();
+        InsProc(p1, "HR_LEAVE", "请假流程", catHr);
+        InsProc(p2, "HR_OT", "加班流程", catHr);
+        InsProc(p3, "ADM_CAR", "用车申请", catAdm);
+        InsFirstVersion(p1, "HR_LEAVE", "请假流程");
+        InsFirstVersion(p2, "HR_OT", "加班流程");
+        InsFirstVersion(p3, "ADM_CAR", "用车申请");
 
         return Ok(new { code = 0, data = new { skipped = false } });
     }

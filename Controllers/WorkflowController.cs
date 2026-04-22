@@ -481,6 +481,12 @@ namespace StoneApi.Controllers
             if (instance == null) return Ok(new { code = 404, message = "流程实例不存在" });
 
             var userId = CurrentUserId();
+            var userName = (User?.Identity?.Name ?? "").Trim();
+            var taskAssignee = (task.assignee ?? "").Trim();
+            if (!CanOperateTask(taskAssignee, userId, userName))
+            {
+                return Ok(new { code = 403, message = "无权限处理该任务（仅任务办理人可操作）" });
+            }
             var now = DateTime.Now;
 
             _db.Ado.BeginTran();
@@ -537,6 +543,16 @@ namespace StoneApi.Controllers
             }
 
             return Ok(new { code = 0, message = "处理成功" });
+        }
+
+        private static bool CanOperateTask(string taskAssignee, string userId, string userName)
+        {
+            var assignee = (taskAssignee ?? "").Trim();
+            if (assignee.Length == 0) return false;
+            if (string.Equals(assignee, "待设置", StringComparison.Ordinal)) return false;
+            if (string.Equals(assignee, (userId ?? "").Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(assignee, (userName ?? "").Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         private void EnsureWorkflowTables()

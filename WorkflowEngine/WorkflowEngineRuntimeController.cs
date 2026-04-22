@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -30,6 +31,44 @@ public class WorkflowEngineRuntimeController : ControllerBase
         ?? User?.Identity?.Name
         ?? "";
 
+    private bool IsWorkflowAdmin()
+    {
+        if (User?.Identity?.IsAuthenticated != true) return false;
+        if (User.IsInRole("WorkflowAdmin") || User.IsInRole("Admin") || User.IsInRole("SuperAdmin"))
+            return true;
+        var roleClaims = User.Claims
+            .Where(c =>
+                c.Type == ClaimTypes.Role
+                || c.Type.Equals("role", StringComparison.OrdinalIgnoreCase)
+                || c.Type.Equals("roles", StringComparison.OrdinalIgnoreCase)
+                || c.Type.Equals("RoleCode", StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Value ?? "")
+            .Where(v => v.Length > 0);
+        foreach (var raw in roleClaims)
+        {
+            var tokens = raw.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var token in tokens)
+            {
+                var t = token.Trim();
+                if (t.Equals("WorkflowAdmin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("Admin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("SuperAdmin", StringComparison.OrdinalIgnoreCase)
+                    || t.Equals("Administrator", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private bool IsRuntimeMockAllowed()
+    {
+        var allowByConfig = _configuration.GetValue<bool?>("WorkflowEngine:AllowRuntimeMockUser") == true
+            || string.Equals(_configuration["WorkflowEngine:AllowRuntimeMockUser"], "true", StringComparison.OrdinalIgnoreCase);
+        return allowByConfig && IsWorkflowAdmin();
+    }
+
     /// <summary>
     /// 测试用：当 WorkflowEngine:AllowRuntimeMockUser=true 且请求头 X-Workflow-Mock-User-Id 非空时，
     /// 「我的待办 / 办理任务」按该工号识别身份（仍需有效 JWT）。生产环境请关闭。
@@ -39,10 +78,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
     private string RuntimeActorUserId()
     {
         var loginUid = CurrentUserId();
-        var allow = _configuration.GetValue<bool?>("WorkflowEngine:AllowRuntimeMockUser") == true
-            || string.Equals(_configuration["WorkflowEngine:AllowRuntimeMockUser"], "true", StringComparison.OrdinalIgnoreCase);
-
-        if (allow
+        if (IsRuntimeMockAllowed()
             && User?.Identity?.IsAuthenticated == true
             && Request.Headers.TryGetValue("X-Workflow-Mock-User-Id", out var mock))
         {
@@ -52,6 +88,287 @@ public class WorkflowEngineRuntimeController : ControllerBase
         }
 
         return loginUid;
+    }
+
+    /// <summary>
+    /// 将“用户ID/工号/用户名”等标识统一解析为 t_base_employee.id（person_key=employee_id）。
+    /// <paramref name="activeOnly"/>：为 true 时仅匹配在职（<c>t_base_employee.status = 0</c>）。
+    /// </summary>
+    private string ResolveEmployeeIdOrEmpty(string rawIdentity, bool activeOnly = false)
+    {
+        var k = (rawIdentity ?? "").Trim();
+        if (k.Length == 0) return "";
+        var activeEmp = activeOnly ? " AND ISNULL(e.status, 0) = 0 " : "";
+        try
+        {
+            var dtEmp = _db.Ado.GetDataTable(
+                $"""
+                SELECT TOP 1
+                  CAST(e.id AS varchar(50)) AS emp_id
+                FROM dbo.t_base_employee e WITH (NOLOCK)
+                WHERE (LTRIM(RTRIM(CAST(e.id AS varchar(50)))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(e.code, ''))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(e.username, ''))) = LTRIM(RTRIM(@k)))
+                   {activeEmp}
+                """,
+                new SugarParameter("@k", k)
+            );
+            if (dtEmp.Rows.Count > 0)
+            {
+                var v = dtEmp.Rows[0]["emp_id"]?.ToString()?.Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+        }
+        catch
+        {
+            // ignore and fallback
+        }
+
+        var activeJoin = activeOnly ? " AND ISNULL(e.status, 0) = 0 " : "";
+        try
+        {
+            var dtByUser = _db.Ado.GetDataTable(
+                $"""
+                SELECT TOP 1
+                  CAST(e.id AS varchar(50)) AS emp_id
+                FROM dbo.vben_t_sys_user u WITH (NOLOCK)
+                LEFT JOIN dbo.t_base_employee e WITH (NOLOCK)
+                  ON (
+                       LTRIM(RTRIM(CAST(e.id AS varchar(50)))) = LTRIM(RTRIM(CAST(u.id AS varchar(50))))
+                    OR
+                       LTRIM(RTRIM(ISNULL(e.code,''))) = LTRIM(RTRIM(ISNULL(u.employee_id,'')))
+                    OR (
+                         u.username IS NOT NULL
+                     AND LTRIM(RTRIM(ISNULL(e.username,''))) = LTRIM(RTRIM(ISNULL(u.username,'')))
+                    )
+                  )
+                WHERE (LTRIM(RTRIM(CAST(u.id AS varchar(50)))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(u.employee_id,''))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(u.username,''))) = LTRIM(RTRIM(@k)))
+                   AND e.id IS NOT NULL
+                   {activeJoin}
+                """,
+                new SugarParameter("@k", k)
+            );
+            if (dtByUser.Rows.Count > 0)
+            {
+                var v = dtByUser.Rows[0]["emp_id"]?.ToString()?.Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(v)) return v;
+            }
+        }
+        catch
+        {
+            // ignore and fallback
+        }
+
+        return "";
+    }
+
+    private string? GetEmployeeDisplayNameOrNull(string empId)
+    {
+        var id = (empId ?? "").Trim();
+        if (id.Length == 0) return null;
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1 LTRIM(RTRIM(ISNULL(name,''))) AS n
+                FROM dbo.t_base_employee WITH (NOLOCK)
+                WHERE LTRIM(RTRIM(CAST(id AS varchar(50)))) = LTRIM(RTRIM(@id))
+                """,
+                new SugarParameter("@id", id));
+            if (dt.Rows.Count == 0) return null;
+            var n = dt.Rows[0]["n"]?.ToString()?.Trim();
+            return string.IsNullOrEmpty(n) ? null : n;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>发起人部门：优先实例 starter_dept_id，否则查员工表 dept_id。</summary>
+    private string? GetStarterDepartmentId(JObject ctx, string starterEmpId)
+    {
+        var fromCtx = (ctx["starterDeptId"]?.ToString() ?? "").Trim();
+        if (fromCtx.Length > 0) return fromCtx;
+        var emp = (starterEmpId ?? "").Trim();
+        if (emp.Length == 0) return null;
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1 CAST(dept_id AS varchar(50)) AS d
+                FROM dbo.t_base_employee WITH (NOLOCK)
+                WHERE LTRIM(RTRIM(CAST(id AS varchar(50)))) = LTRIM(RTRIM(@e))
+                  AND ISNULL(status, 0) = 0
+                """,
+                new SugarParameter("@e", emp));
+            if (dt.Rows.Count == 0) return null;
+            var d = dt.Rows[0]["d"]?.ToString()?.Trim();
+            return string.IsNullOrEmpty(d) ? null : d;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private string? TryGetParentDepartmentId(string deptId)
+    {
+        if (!Guid.TryParse((deptId ?? "").Trim(), out var gid)) return null;
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1 CAST(parent_id AS varchar(50)) AS p
+                FROM dbo.t_base_department WITH (NOLOCK)
+                WHERE id = @id
+                """,
+                new SugarParameter("@id", gid));
+            if (dt.Rows.Count == 0) return null;
+            var p = dt.Rows[0]["p"]?.ToString()?.Trim();
+            return string.IsNullOrEmpty(p) ? null : p;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 从部门行解析主管/代管：优先 firstmanagercode → firstmanager 姓名 → secondmanagercode → secondmanager。
+    /// </summary>
+    private string? TryResolveManagerEmpIdFromDeptRow(string deptId)
+    {
+        if (!Guid.TryParse((deptId ?? "").Trim(), out var gid)) return null;
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1
+                  LTRIM(RTRIM(ISNULL(firstmanagercode,''))) AS fc1,
+                  LTRIM(RTRIM(ISNULL(secondmanagercode,''))) AS fc2,
+                  LTRIM(RTRIM(ISNULL(firstmanager,''))) AS n1,
+                  LTRIM(RTRIM(ISNULL(secondmanager,''))) AS n2
+                FROM dbo.t_base_department WITH (NOLOCK)
+                WHERE id = @id
+                """,
+                new SugarParameter("@id", gid));
+            if (dt.Rows.Count == 0) return null;
+            var r = dt.Rows[0];
+            var fc1 = r["fc1"]?.ToString()?.Trim() ?? "";
+            var fc2 = r["fc2"]?.ToString()?.Trim() ?? "";
+            var n1 = r["n1"]?.ToString()?.Trim() ?? "";
+            var n2 = r["n2"]?.ToString()?.Trim() ?? "";
+
+            if (fc1.Length > 0)
+            {
+                var id = ResolveEmployeeIdOrEmpty(fc1, activeOnly: true);
+                if (id.Length > 0) return id;
+            }
+            if (n1.Length > 0)
+            {
+                var id = TryResolveEmployeeIdByNameExact(n1);
+                if (!string.IsNullOrEmpty(id)) return id;
+            }
+            if (fc2.Length > 0)
+            {
+                var id = ResolveEmployeeIdOrEmpty(fc2, activeOnly: true);
+                if (id.Length > 0) return id;
+            }
+            if (n2.Length > 0) return TryResolveEmployeeIdByNameExact(n2);
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return null;
+    }
+
+    private string? TryResolveEmployeeIdByNameExact(string name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) return null;
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1 CAST(id AS varchar(50)) AS id
+                FROM dbo.t_base_employee WITH (NOLOCK)
+                WHERE LTRIM(RTRIM(ISNULL(name,''))) = LTRIM(RTRIM(@n))
+                  AND ISNULL(status, 0) = 0
+                """,
+                new SugarParameter("@n", n));
+            if (dt.Rows.Count == 0) return null;
+            return dt.Rows[0]["id"]?.ToString()?.Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>直接领导 / 部门主管：仅发起人所在部门。</summary>
+    private string? TryResolveDirectDeptLeader(string starterDeptId) =>
+        TryResolveManagerEmpIdFromDeptRow(starterDeptId);
+
+    /// <summary>间接上级：从上级部门链逐级找第一个能解析出主管的部门。</summary>
+    private string? TryResolveIndirectLeader(string starterDeptId)
+    {
+        var current = TryGetParentDepartmentId(starterDeptId);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var depth = 0;
+        while (!string.IsNullOrEmpty(current) && depth++ < 64)
+        {
+            if (!visited.Add(current)) break;
+            var emp = TryResolveManagerEmpIdFromDeptRow(current);
+            if (!string.IsNullOrEmpty(emp)) return emp;
+            current = TryGetParentDepartmentId(current) ?? "";
+        }
+        return null;
+    }
+
+    /// <param name="expr">如 $resolve.directLeader</param>
+    private (string? EmpId, string? Error) ResolveAssigneeExpression(
+        string expr,
+        JObject form,
+        JObject ctx)
+    {
+        var e = (expr ?? "").Trim();
+        var starter = (ctx["starterUserId"]?.ToString() ?? "").Trim();
+        switch (e)
+        {
+            case "$resolve.initiatorSelf":
+                if (starter.Length == 0) return (null, "缺少发起人标识");
+                var self = ResolveEmployeeIdOrEmpty(starter, activeOnly: true);
+                if (self.Length == 0) return (null, "发起人未匹配到在职员工");
+                return (self, null);
+            case "$resolve.directLeader":
+            case "$resolve.deptHead":
+            {
+                var deptId = GetStarterDepartmentId(ctx, starter);
+                if (string.IsNullOrEmpty(deptId))
+                    return (null, "无法解析发起人部门（请传 starterDeptId 或维护员工 dept_id）");
+                var leader = TryResolveDirectDeptLeader(deptId);
+                return leader == null
+                    ? (null, "本部门未配置主管/代管人或无法匹配到在职员工")
+                    : (leader, null);
+            }
+            case "$resolve.indirectLeader":
+            {
+                var deptId = GetStarterDepartmentId(ctx, starter);
+                if (string.IsNullOrEmpty(deptId))
+                    return (null, "无法解析发起人部门（请传 starterDeptId 或维护员工 dept_id）");
+                var leader = TryResolveIndirectLeader(deptId);
+                return leader == null
+                    ? (null, "上级部门链未找到可匹配的主管")
+                    : (leader, null);
+            }
+            default:
+                return (null, $"未知审批表达式：{e}");
+        }
     }
 
     private static string NewBizNo(string prefix) =>
@@ -78,15 +395,21 @@ public class WorkflowEngineRuntimeController : ControllerBase
         var loginUid = CurrentUserId();
         if (string.IsNullOrWhiteSpace(loginUid))
             return Ok(new { code = 401, message = "未获取到登录人" });
-        var starterUid = string.IsNullOrWhiteSpace(req.MockStarterUserId)
+        if (!string.IsNullOrWhiteSpace(req.MockStarterUserId) && !IsRuntimeMockAllowed())
+            return Ok(new { code = 403, message = "无权限使用模拟发起人能力" });
+        var starterIdentity = string.IsNullOrWhiteSpace(req.MockStarterUserId)
             ? loginUid
             : req.MockStarterUserId.Trim();
+        var starterUid = ResolveEmployeeIdOrEmpty(starterIdentity);
+        if (string.IsNullOrWhiteSpace(starterUid))
+            return Ok(new { code = 400, message = $"发起人标识未映射到员工ID：{starterIdentity}" });
         var starterName = string.IsNullOrWhiteSpace(req.MockStarterName)
-            ? starterUid
+            ? starterIdentity
             : req.MockStarterName.Trim();
 
         var def = ResolveProcessDef(req.ProcessDefId, req.ProcessCode);
         if (def == null) return Ok(new { code = 404, message = "流程定义不存在" });
+        if (!def.is_valid) return Ok(new { code = 400, message = "流程已标记为无效，无法发起" });
 
         var ver = ResolvePublishedVersion(def.id);
         if (ver == null) return Ok(new { code = 400, message = "流程尚未发布版本" });
@@ -118,9 +441,14 @@ public class WorkflowEngineRuntimeController : ControllerBase
             : (!string.IsNullOrWhiteSpace(title) ? title : compatProcessCode);
 
         var nextNodes = ResolveNextActionableNodes(graph, startNode.Id, form, ctx);
+        var nextRunnable = nextNodes.Where(x => x.BizType != "end").ToList();
         var currentNodeIds = string.Join(",",
-            nextNodes.Where(x => x.BizType != "end").Select(x => x.Id).Distinct());
-        var isCompletedDirectly = !nextNodes.Any(x => x.BizType != "end");
+            nextRunnable.Select(x => x.Id).Distinct());
+        var isCompletedDirectly = nextRunnable.Count == 0;
+
+        var (taskPlans, taskPlanErr) = BuildNewTaskPlansForNodes(nextRunnable, starterUid, form, ctx);
+        if (!string.IsNullOrEmpty(taskPlanErr))
+            return Ok(new { code = 400, message = taskPlanErr });
 
         _db.Ado.BeginTran();
         try
@@ -135,7 +463,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 versionNo: ver.version_no,
                 businessKey: req.BusinessKey?.Trim(),
                 title: title,
-                starterUserId: starterUid,
+                starterEmpId: starterUid,
                 starterDeptId: req.StarterDeptId?.Trim(),
                 status: isCompletedDirectly ? (byte)1 : (byte)0,
                 currentNodeIds: currentNodeIds,
@@ -173,7 +501,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 created_at = now
             }).ExecuteCommand();
 
-            foreach (var plan in BuildNewTaskPlansForNodes(nextNodes.Where(x => x.BizType != "end").ToList(), starterUid))
+            foreach (var plan in taskPlans)
             {
                 _db.Insertable(new wf_task
                 {
@@ -258,7 +586,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
         var tabsData = ToJObjectOrNull(req.TabsData);
         var ctx = new JObject
         {
-            ["starterUserId"] = inst.starter_user_id,
+            ["starterUserId"] = inst.starter_emp_id,
             ["starterDeptId"] = inst.starter_dept_id ?? "",
         };
         var now = DateTime.Now;
@@ -397,6 +725,53 @@ public class WorkflowEngineRuntimeController : ControllerBase
         });
     }
 
+    public class RuntimeDeleteTasksRequest
+    {
+        public List<string>? TaskIds { get; set; }
+    }
+
+    /// <summary>
+    /// 批量删除待办（仅删除 status=0 的待办，转为 status=4 取消态，不再出现在待办列表）。
+    /// </summary>
+    [HttpPost("task/delete-batch")]
+    public IActionResult DeleteTasks([FromBody] RuntimeDeleteTasksRequest req)
+    {
+        if (!IsWorkflowAdmin())
+            return Ok(new { code = 403, message = "无权限执行批量删除待办操作" });
+
+        var rawIds = (req?.TaskIds ?? new List<string>())
+            .Select(x => (x ?? "").Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (rawIds.Count == 0) return Ok(new { code = 400, message = "taskIds 不能为空" });
+
+        var guidIds = rawIds
+            .Select(x => Guid.TryParse(x, out var g) ? g : Guid.Empty)
+            .Where(g => g != Guid.Empty)
+            .Distinct()
+            .ToList();
+        if (guidIds.Count == 0) return Ok(new { code = 400, message = "taskIds 格式不正确" });
+
+        var now = DateTime.Now;
+        var affected = _db.Updateable<wf_task>()
+            .SetColumns(t => t.status == 4)
+            .SetColumns(t => t.completed_at == now)
+            .SetColumns(t => t.updated_at == now)
+            .Where(t => guidIds.Contains(t.id) && t.status == 0)
+            .ExecuteCommand();
+
+        return Ok(new
+        {
+            code = 0,
+            data = new
+            {
+                requested = rawIds.Count,
+                affected
+            }
+        });
+    }
+
     [HttpGet("todo")]
     public IActionResult GetMyTodo([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
@@ -423,8 +798,39 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 receivedAt = t.received_at,
                 businessKey = i.business_key,
                 title = i.title,
+                status = t.status,
             })
             .ToPageList(page, pageSize, ref total);
+
+        var cache = new Dictionary<string, (string WorkNo, string DisplayName)>(StringComparer.OrdinalIgnoreCase);
+        var items = data.Select(x =>
+        {
+            var assigneeId = Convert.ToString(x.assigneeUserId) ?? "";
+            var assigneeName = Convert.ToString(x.assigneeName) ?? "";
+            if (!cache.TryGetValue(assigneeId, out var prof))
+            {
+                prof = ResolveAssigneeProfile(assigneeId, assigneeName);
+                cache[assigneeId] = prof;
+            }
+            return new
+            {
+                x.taskId,
+                x.taskNo,
+                x.instanceId,
+                x.instanceNo,
+                x.processName,
+                x.nodeId,
+                x.nodeName,
+                x.assigneeUserId,
+                x.assigneeName,
+                assigneeWorkNo = prof.WorkNo,
+                assigneeDisplayName = prof.DisplayName,
+                x.receivedAt,
+                x.businessKey,
+                x.title,
+                x.status,
+            };
+        }).ToList();
 
         return Ok(new
         {
@@ -434,7 +840,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 page,
                 pageSize,
                 total,
-                items = data
+                items
             }
         });
     }
@@ -443,16 +849,39 @@ public class WorkflowEngineRuntimeController : ControllerBase
     /// 全员待办（不按办理人过滤）。用于监控/排查；办理任务仍须任务办理人本人调用 task/complete。
     /// </summary>
     [HttpGet("todo/all")]
-    public IActionResult GetAllTodo([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+    public IActionResult GetAllTodo(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? box = null)
     {
+        if (!IsWorkflowAdmin())
+            return Ok(new { code = 403, message = "无权限查看全员待办" });
+
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
+        var boxMode = (box ?? "todo").Trim().ToLowerInvariant();
+        if (boxMode != "todo" && boxMode != "cc" && boxMode != "done")
+        {
+            boxMode = "todo";
+        }
 
         var total = 0;
-        var data = _db.Queryable<wf_task, wf_instance, wf_process_def>(
-                (t, i, d) => t.instance_id == i.id && i.process_def_id == d.id)
-            .Where((t, i, d) => t.status == 0)
-            .OrderBy((t, i, d) => t.received_at, OrderByType.Desc)
+        var q = _db.Queryable<wf_task, wf_instance, wf_process_def>(
+            (t, i, d) => t.instance_id == i.id && i.process_def_id == d.id);
+        if (boxMode == "todo")
+        {
+            q = q.Where((t, i, d) => t.status == 0 && t.task_type != 2);
+        }
+        else if (boxMode == "cc")
+        {
+            q = q.Where((t, i, d) => t.status == 0 && t.task_type == 2);
+        }
+        else
+        {
+            q = q.Where((t, i, d) => t.status != 0);
+        }
+        var data = q
+            .OrderBy((t, i, d) => boxMode == "done" ? t.completed_at : t.received_at, OrderByType.Desc)
             .Select((t, i, d) => new
             {
                 taskId = t.id,
@@ -464,11 +893,46 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 nodeName = t.node_name,
                 assigneeUserId = t.assignee_user_id,
                 assigneeName = t.assignee_name,
+                taskType = t.task_type,
                 receivedAt = t.received_at,
+                completedAt = t.completed_at,
                 businessKey = i.business_key,
                 title = i.title,
+                status = t.status,
             })
             .ToPageList(page, pageSize, ref total);
+
+        var cache = new Dictionary<string, (string WorkNo, string DisplayName)>(StringComparer.OrdinalIgnoreCase);
+        var items = data.Select(x =>
+        {
+            var assigneeId = Convert.ToString(x.assigneeUserId) ?? "";
+            var assigneeName = Convert.ToString(x.assigneeName) ?? "";
+            if (!cache.TryGetValue(assigneeId, out var prof))
+            {
+                prof = ResolveAssigneeProfile(assigneeId, assigneeName);
+                cache[assigneeId] = prof;
+            }
+            return new
+            {
+                x.taskId,
+                x.taskNo,
+                x.instanceId,
+                x.instanceNo,
+                x.processName,
+                x.nodeId,
+                x.nodeName,
+                x.assigneeUserId,
+                x.assigneeName,
+                x.taskType,
+                assigneeWorkNo = prof.WorkNo,
+                assigneeDisplayName = prof.DisplayName,
+                x.receivedAt,
+                x.completedAt,
+                x.businessKey,
+                x.title,
+                x.status,
+            };
+        }).ToList();
 
         return Ok(new
         {
@@ -478,9 +942,148 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 page,
                 pageSize,
                 total,
-                items = data
+                items
             }
         });
+    }
+
+    private static bool LooksLikeRoleLabel(string s)
+    {
+        var t = (s ?? "").Trim();
+        if (t.Length == 0) return false;
+        return t.Contains("负责人", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("经理", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("审批", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("发起", StringComparison.OrdinalIgnoreCase)
+            || t.Contains("角色", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private (string WorkNo, string DisplayName) ResolveAssigneeProfile(string assigneeUserId, string? assigneeName)
+    {
+        var uid = (assigneeUserId ?? "").Trim();
+        var rawName = (assigneeName ?? "").Trim();
+        if (uid.Length == 0) return ("", rawName);
+
+        static string Cell(DataRow row, string col)
+        {
+            if (!row.Table.Columns.Contains(col)) return "";
+            var o = row[col];
+            return o == null || o == DBNull.Value ? "" : o.ToString()!.Trim();
+        }
+
+        try
+        {
+            var dt = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1
+                  u.username AS username,
+                  u.employee_id AS employee_id,
+                  u.name AS user_name,
+                  e.code AS emp_code,
+                  e.name AS emp_name
+                FROM dbo.vben_t_sys_user u WITH (NOLOCK)
+                LEFT JOIN dbo.t_base_employee e WITH (NOLOCK)
+                  ON (
+                       LTRIM(RTRIM(ISNULL(e.code,''))) = LTRIM(RTRIM(ISNULL(u.employee_id,'')))
+                    OR (
+                         u.username IS NOT NULL
+                     AND LTRIM(RTRIM(ISNULL(e.username,''))) = LTRIM(RTRIM(ISNULL(u.username,'')))
+                    )
+                  )
+                WHERE LTRIM(RTRIM(CAST(u.id AS varchar(50)))) = LTRIM(RTRIM(@uid))
+                   OR LTRIM(RTRIM(ISNULL(u.employee_id,''))) = LTRIM(RTRIM(@uid))
+                   OR LTRIM(RTRIM(ISNULL(u.username,''))) = LTRIM(RTRIM(@uid))
+                """,
+                new SugarParameter("@uid", uid)
+            );
+            if (dt.Rows.Count > 0)
+            {
+                var r = dt.Rows[0];
+                var empCode = Cell(r, "emp_code");
+                var employeeId = Cell(r, "employee_id");
+                var username = Cell(r, "username");
+                var userName = Cell(r, "user_name");
+                var empName = Cell(r, "emp_name");
+
+                var workNo = !string.IsNullOrWhiteSpace(empCode)
+                    ? empCode
+                    : !string.IsNullOrWhiteSpace(employeeId)
+                        ? employeeId
+                        : !string.IsNullOrWhiteSpace(username)
+                            ? username
+                            : uid;
+
+                // 姓名优先员工主数据；若联表没拿到员工名，再按“工号/用户名”直查员工表一次兜底。
+                if (string.IsNullOrWhiteSpace(empName))
+                {
+                    var dtEmpByCode = _db.Ado.GetDataTable(
+                        """
+                        SELECT TOP 1
+                          e.code AS emp_code,
+                          e.name AS emp_name
+                        FROM dbo.t_base_employee e WITH (NOLOCK)
+                        WHERE LTRIM(RTRIM(CAST(e.id AS varchar(50)))) = LTRIM(RTRIM(@k))
+                           OR LTRIM(RTRIM(ISNULL(e.code,''))) = LTRIM(RTRIM(@k))
+                           OR LTRIM(RTRIM(ISNULL(e.username,''))) = LTRIM(RTRIM(@k))
+                        """,
+                        new SugarParameter("@k", workNo)
+                    );
+                    if (dtEmpByCode.Rows.Count > 0)
+                    {
+                        var er = dtEmpByCode.Rows[0];
+                        var byCodeName = Cell(er, "emp_name");
+                        var byCodeNo = Cell(er, "emp_code");
+                        if (!string.IsNullOrWhiteSpace(byCodeNo)) workNo = byCodeNo;
+                        if (!string.IsNullOrWhiteSpace(byCodeName)) empName = byCodeName;
+                    }
+                }
+
+                var displayName = !string.IsNullOrWhiteSpace(empName)
+                    ? empName
+                    : (!LooksLikeRoleLabel(userName) && !string.IsNullOrWhiteSpace(userName)
+                        ? userName
+                        : workNo);
+
+                return (workNo, displayName);
+            }
+        }
+        catch
+        {
+            // ignore and fallback
+        }
+
+        // 未命中 sys_user 时，也按传入 id（可能本身就是工号）直查员工主数据
+        try
+        {
+            var dtEmp = _db.Ado.GetDataTable(
+                """
+                SELECT TOP 1
+                  e.code AS emp_code,
+                  e.name AS emp_name
+                FROM dbo.t_base_employee e WITH (NOLOCK)
+                WHERE LTRIM(RTRIM(CAST(e.id AS varchar(50)))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(e.code,''))) = LTRIM(RTRIM(@k))
+                   OR LTRIM(RTRIM(ISNULL(e.username,''))) = LTRIM(RTRIM(@k))
+                """,
+                new SugarParameter("@k", uid)
+            );
+            if (dtEmp.Rows.Count > 0)
+            {
+                var er = dtEmp.Rows[0];
+                var empCode = Cell(er, "emp_code");
+                var empName = Cell(er, "emp_name");
+                var workNo = !string.IsNullOrWhiteSpace(empCode) ? empCode : uid;
+                var displayName = !string.IsNullOrWhiteSpace(empName) ? empName : workNo;
+                return (workNo, displayName);
+            }
+        }
+        catch
+        {
+            // ignore and fallback
+        }
+
+        var fallbackName = LooksLikeRoleLabel(rawName) ? uid : (string.IsNullOrWhiteSpace(rawName) ? uid : rawName);
+        return (uid, fallbackName);
     }
 
     [HttpGet("instance/{instanceId:guid}")]
@@ -581,13 +1184,8 @@ public class WorkflowEngineRuntimeController : ControllerBase
 
     private wf_process_def_ver? ResolvePublishedVersion(Guid processDefId)
     {
-        var published = _db.Queryable<wf_process_def_ver>()
-            .Where(v => v.process_def_id == processDefId && v.is_published)
-            .OrderBy(v => v.version_no, OrderByType.Desc)
-            .First();
-        if (published != null) return published;
         return _db.Queryable<wf_process_def_ver>()
-            .Where(v => v.process_def_id == processDefId)
+            .Where(v => v.process_def_id == processDefId && v.is_published)
             .OrderBy(v => v.version_no, OrderByType.Desc)
             .First();
     }
@@ -802,19 +1400,123 @@ public class WorkflowEngineRuntimeController : ControllerBase
         };
     }
 
-    private static List<(string UserId, string? DisplayName)> ResolveAssignees(NodeVm node, string fallbackUserId)
+    /// <summary>
+    /// 解析节点审批人；assigneeStrategies 按设计器约定顺序尝试，命中第一条产出办理人的策略即停止（同条 user 可多选）。
+    /// 排除发起人本人（文档：不需要自己审批）。结果 userId 均为在职员工的 t_base_employee.id。
+    /// </summary>
+    private (List<(string UserId, string? DisplayName)> List, string? Error) ResolveAssigneesForNode(
+        NodeVm node,
+        JObject form,
+        JObject ctx,
+        string fallbackUserId)
     {
+        var starter = (ctx["starterUserId"]?.ToString() ?? "").Trim();
         var outList = new List<(string UserId, string? DisplayName)>();
+        var allowSelfApproval = false;
+
         var arr = node.Properties["assigneeStrategies"] as JArray;
-        if (arr != null)
+        if (arr != null && arr.Count > 0)
         {
             foreach (var jo in arr.OfType<JObject>())
             {
                 var kind = (jo["kind"]?.ToString() ?? "").Trim().ToLowerInvariant();
                 var value = (jo["value"]?.ToString() ?? "").Trim();
                 var label = (jo["label"]?.ToString() ?? "").Trim();
-                if (kind == "user" && value.Length > 0)
-                    outList.Add((value, label.Length > 0 ? label : value));
+                switch (kind)
+                {
+                    case "user":
+                    {
+                        if (value.Length == 0) continue;
+                        var parts = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        var batch = new List<(string UserId, string? DisplayName)>();
+                        foreach (var part in parts)
+                        {
+                            var id = ResolveEmployeeIdOrEmpty(part, activeOnly: true);
+                            if (id.Length == 0)
+                                return (new List<(string, string?)>(), $"审批人标识未映射到在职员工：{part}");
+                            var dn = GetEmployeeDisplayNameOrNull(id) ?? (label.Length > 0 ? label : part);
+                            batch.Add((id, dn));
+                        }
+                        outList = batch;
+                        goto AfterStrategies;
+                    }
+                    case "form_field":
+                    {
+                        if (value.Length == 0) continue;
+                        var raw = form[value]?.ToString() ?? "";
+                        if (string.IsNullOrWhiteSpace(raw)) continue;
+                        var id = ResolveEmployeeIdOrEmpty(raw.Trim(), activeOnly: true);
+                        if (id.Length == 0)
+                            return (new List<(string, string?)>(), $"表单字段值未映射到在职员工：{raw}");
+                        outList = new List<(string, string?)>
+                        {
+                            (id, GetEmployeeDisplayNameOrNull(id) ?? raw.Trim())
+                        };
+                        goto AfterStrategies;
+                    }
+                    case "expression":
+                    {
+                        if (value.Length == 0) continue;
+                        if (string.Equals(value.Trim(), "$resolve.initiatorSelf", StringComparison.OrdinalIgnoreCase))
+                            allowSelfApproval = true;
+                        var (empId, err) = ResolveAssigneeExpression(value, form, ctx);
+                        if (!string.IsNullOrEmpty(err))
+                            return (new List<(string, string?)>(), err);
+                        if (string.IsNullOrEmpty(empId)) continue;
+                        outList = new List<(string, string?)>
+                        {
+                            (empId, GetEmployeeDisplayNameOrNull(empId) ?? (label.Length > 0 ? label : empId))
+                        };
+                        goto AfterStrategies;
+                    }
+                    default:
+                        continue;
+                }
+            }
+        }
+
+        AfterStrategies:
+        if (outList.Count == 0)
+        {
+            var ar = node.Properties["approverResolve"] as JObject;
+            if (ar != null)
+            {
+                var mode = (ar["mode"]?.ToString() ?? "").Trim();
+                if (string.Equals(mode, "form_field", StringComparison.OrdinalIgnoreCase))
+                {
+                    var key = (ar["formFieldKey"]?.ToString() ?? "").Trim();
+                    if (key.Length > 0)
+                    {
+                        var raw = form[key]?.ToString() ?? "";
+                        if (string.IsNullOrWhiteSpace(raw))
+                            return (new List<(string, string?)>(), $"表单字段「{key}」为空，无法解析审批人");
+                        var id = ResolveEmployeeIdOrEmpty(raw.Trim(), activeOnly: true);
+                        if (id.Length == 0)
+                            return (new List<(string, string?)>(), $"表单字段值未映射到在职员工：{raw}");
+                        outList.Add((id, GetEmployeeDisplayNameOrNull(id) ?? raw.Trim()));
+                    }
+                }
+                else
+                {
+                    if (string.Equals(mode, "initiator_self", StringComparison.OrdinalIgnoreCase))
+                        allowSelfApproval = true;
+                    var expr = mode switch
+                    {
+                        "direct_leader" => "$resolve.directLeader",
+                        "indirect_leader" => "$resolve.indirectLeader",
+                        "dept_head" => "$resolve.deptHead",
+                        "initiator_self" => "$resolve.initiatorSelf",
+                        _ => ""
+                    };
+                    if (expr.Length > 0)
+                    {
+                        var (empId, err) = ResolveAssigneeExpression(expr, form, ctx);
+                        if (!string.IsNullOrEmpty(err))
+                            return (new List<(string, string?)>(), err);
+                        if (!string.IsNullOrEmpty(empId))
+                            outList.Add((empId, GetEmployeeDisplayNameOrNull(empId) ?? empId));
+                    }
+                }
             }
         }
 
@@ -827,9 +1529,22 @@ public class WorkflowEngineRuntimeController : ControllerBase
         if (outList.Count == 0)
             outList.Add((fallbackUserId, fallbackUserId));
 
-        return outList.GroupBy(x => x.UserId, StringComparer.OrdinalIgnoreCase)
+        outList = outList
+            .GroupBy(x => x.UserId, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .ToList();
+        if (!allowSelfApproval)
+            outList = outList
+                .Where(x => !string.Equals(x.UserId, starter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        if (outList.Count == 0)
+            return (new List<(string, string?)>(),
+                allowSelfApproval
+                    ? $"{node.Name} 节点未匹配到审批人。请联系管理员核实。"
+                    : $"{node.Name} 节点未匹配到审批人（已排除本人）。请联系管理员核实。");
+
+        return (outList, null);
     }
 
     private static string ResolveNodeRoutingMode(NodeVm node)
@@ -842,7 +1557,11 @@ public class WorkflowEngineRuntimeController : ControllerBase
         return node.BizType == "cc" ? "cc" : "any";
     }
 
-    private List<TaskPlan> BuildNewTaskPlansForNodes(List<NodeVm> nodes, string fallbackUserId)
+    private (List<TaskPlan> Plans, string? Error) BuildNewTaskPlansForNodes(
+        List<NodeVm> nodes,
+        string fallbackUserId,
+        JObject form,
+        JObject ctx)
     {
         var plans = new List<TaskPlan>();
         foreach (var node in nodes)
@@ -877,7 +1596,10 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 }
             }
 
-            foreach (var a in ResolveAssignees(node, fallbackUserId))
+            var (assignees, err) = ResolveAssigneesForNode(node, form, ctx, fallbackUserId);
+            if (!string.IsNullOrEmpty(err))
+                return (new List<TaskPlan>(), err);
+            foreach (var a in assignees)
             {
                 plans.Add(new TaskPlan
                 {
@@ -891,7 +1613,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 });
             }
         }
-        return plans;
+        return (plans, null);
     }
 
     private TransitionPlan BuildTransitionForTaskComplete(
@@ -913,7 +1635,14 @@ public class WorkflowEngineRuntimeController : ControllerBase
                 var backNode = graph.Nodes.FirstOrDefault(n => n.Id == rejectToNodeId.Trim());
                 if (backNode == null)
                     return TransitionPlan.Fail("指定的退回节点不存在");
-                result.NewTaskPlans = BuildNewTaskPlansForNodes(new List<NodeVm> { backNode }, ctx["starterUserId"]?.ToString() ?? "");
+                var (backPlans, backErr) = BuildNewTaskPlansForNodes(
+                    new List<NodeVm> { backNode },
+                    ctx["starterUserId"]?.ToString() ?? "",
+                    form,
+                    ctx);
+                if (!string.IsNullOrEmpty(backErr))
+                    return TransitionPlan.Fail(backErr);
+                result.NewTaskPlans = backPlans;
                 result.NextRunningNodeIds = result.NewTaskPlans.Select(x => x.NodeId).Distinct().ToList();
                 result.CancelTaskIds = pendingAtNode.Where(t => t.id != curTask.id).Select(t => t.id).ToList();
                 return result;
@@ -978,7 +1707,14 @@ public class WorkflowEngineRuntimeController : ControllerBase
             return result;
         }
 
-        result.NewTaskPlans = BuildNewTaskPlansForNodes(runNodes, ctx["starterUserId"]?.ToString() ?? "");
+        var (fwdPlans, fwdErr) = BuildNewTaskPlansForNodes(
+            runNodes,
+            ctx["starterUserId"]?.ToString() ?? "",
+            form,
+            ctx);
+        if (!string.IsNullOrEmpty(fwdErr))
+            return TransitionPlan.Fail(fwdErr);
+        result.NewTaskPlans = fwdPlans;
         result.NextRunningNodeIds = result.NewTaskPlans.Select(x => x.NodeId).Distinct().ToList();
         return result;
     }
@@ -1008,7 +1744,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
         int versionNo,
         string? businessKey,
         string? title,
-        string starterUserId,
+        string starterEmpId,
         string? starterDeptId,
         byte status,
         string currentNodeIds,
@@ -1040,7 +1776,9 @@ public class WorkflowEngineRuntimeController : ControllerBase
         Add("process_def_ver_id", processDefVerId);
         Add("business_key", businessKey);
         Add("title", title);
-        Add("starter_user_id", starterUserId);
+        // 新旧列并存兼容：优先使用 starter_emp_id，旧列仍同步写入
+        Add("starter_emp_id", starterEmpId);
+        Add("starter_user_id", starterEmpId);
         Add("starter_dept_id", starterDeptId);
         Add("status", status);
         Add("current_node_ids", currentNodeIds);
@@ -1053,7 +1791,7 @@ public class WorkflowEngineRuntimeController : ControllerBase
         Add("process_code", processCode);
         Add("process_name", processName);
         Add("definition_version", versionNo.ToString());
-        Add("initiator", starterUserId);
+        Add("initiator", starterEmpId);
         Add("current_node_id", currentNodeIds);
 
         if (names.Count == 0) throw new Exception("wf_instance 表字段读取失败");
