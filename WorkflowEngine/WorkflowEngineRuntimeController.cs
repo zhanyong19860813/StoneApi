@@ -411,8 +411,8 @@ public class WorkflowEngineRuntimeController : ControllerBase
         if (def == null) return Ok(new { code = 404, message = "流程定义不存在" });
         if (!def.is_valid) return Ok(new { code = 400, message = "流程已标记为无效，无法发起" });
 
-        var ver = ResolvePublishedVersion(def.id);
-        if (ver == null) return Ok(new { code = 400, message = "流程尚未发布版本" });
+        var ver = ResolveLatestVersion(def.id);
+        if (ver == null) return Ok(new { code = 400, message = "流程尚无可用版本" });
 
         if (!TryParseGraph(ver.definition_json, out var graph, out var parseErr))
             return Ok(new { code = 400, message = $"definition_json 解析失败：{parseErr}" });
@@ -854,9 +854,6 @@ public class WorkflowEngineRuntimeController : ControllerBase
         [FromQuery] int pageSize = 20,
         [FromQuery] string? box = null)
     {
-        if (!IsWorkflowAdmin())
-            return Ok(new { code = 403, message = "无权限查看全员待办" });
-
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
         var boxMode = (box ?? "todo").Trim().ToLowerInvariant();
@@ -1182,10 +1179,10 @@ public class WorkflowEngineRuntimeController : ControllerBase
         return _db.Queryable<wf_process_def>().First(x => x.process_code == code);
     }
 
-    private wf_process_def_ver? ResolvePublishedVersion(Guid processDefId)
+    private wf_process_def_ver? ResolveLatestVersion(Guid processDefId)
     {
         return _db.Queryable<wf_process_def_ver>()
-            .Where(v => v.process_def_id == processDefId && v.is_published)
+            .Where(v => v.process_def_id == processDefId)
             .OrderBy(v => v.version_no, OrderByType.Desc)
             .First();
     }
